@@ -6,7 +6,7 @@ const won = (v) => (Number(v) || 0).toLocaleString('ko-KR');
 const km = (v) => (Math.round((Number(v) || 0) * 10) / 10).toLocaleString('ko-KR', { maximumFractionDigits: 1 });
 const FUEL = { gasoline: '휘발유', diesel: '경유', lpg: 'LPG', hybrid: '하이브리드(휘발유)', ev: '전기' };
 const OWN = { corporate: '법인차량', personal: '개인차량' };
-const CARD = { corporate: '법인카드', personal: '개인카드' };
+const CARD = { corporate: '법인카드', personal: '개인카드', receipt: '증빙(이관)' };
 const EXP_CATS = ['주유', '충전', '통행료', '주차', '세차', '정비', '식대', '기타'];
 const MAINT_TYPES = ['정기점검', '엔진오일', '타이어', '소모품', '수리', '세차', '보험', '검사', '사고', '기타'];
 
@@ -139,7 +139,7 @@ async function pageTrips() {
   const [trips, exps, vehicles] = await Promise.all([api(`/api/trips?${qs}`), api(`/api/expenses?${qs}`), api('/api/vehicles')]);
   const myVehicles = vehicles.filter((v) => v.user_id === u.id && v.active);
   const t = trips.reduce((a, r) => ({ km: a.km + Number(r.distance_km), toll: a.toll + r.toll_won, fuel: a.fuel + r.fuel_cost_won, park: a.park + r.parking_won }), { km: 0, toll: 0, fuel: 0, park: 0 });
-  const e = exps.reduce((a, r) => { a[r.card_type] += r.amount; return a; }, { corporate: 0, personal: 0 });
+  const e = exps.reduce((a, r) => { if (r.card_type in a) a[r.card_type] += r.amount; return a; }, { corporate: 0, personal: 0 });
 
   main.innerHTML = `
     <div class="crumb">${isAdmin() ? '<a id="back">차량운행일지</a> / ' : ''}${userLabel(u)}</div>
@@ -177,7 +177,7 @@ async function pageTrips() {
       body.innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-exp">+ 카드 사용 등록</button></div>
         <div class="table-wrap"><table><thead><tr><th>일자</th><th>구분</th><th>항목</th><th>목적</th><th class="n">금액</th><th>증빙 사진</th><th>비고</th><th></th></tr></thead>
         <tbody>${exps.map((r) => `<tr><td>${r.expense_date.slice(0, 10)}</td>
-          <td><span class="badge ${r.card_type === 'corporate' ? 'corp' : 'pers'}">${CARD[r.card_type]}</span></td>
+          <td><span class="badge ${r.card_type === 'corporate' ? 'corp' : r.card_type === 'personal' ? 'pers' : 'off'}">${CARD[r.card_type]}</span></td>
           <td>${esc(r.category)}</td><td class="wrap">${esc(r.purpose)}</td><td class="n">${won(r.amount)}</td><td>${thumbs(r.photos)}</td>
           <td class="wrap">${esc(r.memo)}</td><td><button class="btn sm" data-edit="${r.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">기록 없음</td></tr>'}</tbody>
         <tfoot>
@@ -594,7 +594,7 @@ async function pageSettings() {
       <div><button class="btn primary" id="save">저장</button></div></div>
     <div class="card" style="display:grid;gap:12px"><h2>기존 엑셀 데이터 이관</h2>
       <p class="note">기존 엑셀(SV팀 차량 운행일지 · 직원점검 관리일지)에서 추출한 이관 파일(.json.gz)을 올립니다. 다시 올리면 이전 엑셀 이관분을 지우고 새로 적재합니다. 웹에서 입력한 기록은 유지됩니다.</p>
-      <label>이관 파일<input type="file" name="file" accept=".gz,.json"></label>
+      <label>이관 파일 (.zip / .json.gz)<input type="file" name="file" accept=".zip,.gz,.json"></label>
       <div class="row"><button class="btn" id="dry">미리 검사</button><button class="btn primary" id="imp">이관 실행</button></div><pre id="imp-out" class="note"></pre></div>`;
   $('#save').onclick = async () => {
     const body = {}; ['kakao_rest_key', 'kakao_js_key', 'opinet_key', 'price_gasoline', 'price_diesel', 'price_lpg', 'price_ev'].forEach((k) => (body[k] = $(`[name=${k}]`, main).value));
@@ -602,8 +602,19 @@ async function pageSettings() {
   };
   const run = async (dry) => {
     const file = $('[name=file]', main).files[0]; if (!file) return toast('파일을 선택하세요', true);
-    const fd = new FormData(); fd.append('file', file); fd.append('dry_run', dry);
-    try { const r = await api('/api/admin/import', { method: 'POST', body: fd }); $('#imp-out').textContent = JSON.stringify(r, null, 2); } catch (e) { fail(e); }
+    const out = $('#imp-out');
+    $$('#dry,#imp', main).forEach((b) => (b.disabled = true));
+    try {
+      const CH = 4 * 1024 * 1024, total = Math.max(1, Math.ceil(file.size / CH)), id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      let r;
+      for (let i = 0; i < total; i++) {
+        out.textContent = `업로드 중 ${i + 1}/${total} (${Math.round(((i + 1) / total) * 100)}%)${i === total - 1 ? ' · 서버 적재 중…' : ''}`;
+        const res = await fetch(`/api/admin/import-chunk?id=${id}&index=${i}&total=${total}&dry=${dry}`, { method: 'POST', body: file.slice(i * CH, (i + 1) * CH), credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' } });
+        r = await res.json(); if (!res.ok) throw new Error(r.error || '업로드 실패');
+      }
+      out.textContent = (dry ? '[미리 검사 · 저장 안 됨]\n' : '[이관 완료]\n') + JSON.stringify(r, null, 2);
+    } catch (e) { fail(e); out.textContent = '실패: ' + e.message; }
+    $$('#dry,#imp', main).forEach((b) => (b.disabled = false));
   };
   $('#dry').onclick = () => run(true); $('#imp').onclick = () => run(false);
 }

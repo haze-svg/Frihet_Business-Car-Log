@@ -544,6 +544,24 @@ app.get('/api/public-config', auth, wrap(async (req, res) => {
 }));
 
 // ---------- 기존 엑셀 이관 데이터 적재 (관리자) ----------
+// 대용량 패키지는 브라우저에서 4MB 단위로 나눠 전송 (프록시 업로드 한도 회피)
+const fs = require('fs');
+const os = require('os');
+app.post('/api/admin/import-chunk', auth, admin, express.raw({ type: '*/*', limit: '8mb' }), wrap(async (req, res) => {
+  const id = String(req.query.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 40);
+  const index = int(req.query.index, -1), total = int(req.query.total, 0);
+  if (!id || index < 0 || total < 1 || index >= total) throw bad('잘못된 업로드 요청');
+  const file = path.join(os.tmpdir(), `fbcl-import-${id}`);
+  if (index === 0 && fs.existsSync(file)) fs.unlinkSync(file);
+  fs.appendFileSync(file, req.body);
+  if (index < total - 1) return res.json({ received: index + 1, total });
+  try {
+    const { importLegacy } = require('./importer');
+    res.json(await importLegacy(fs.readFileSync(file), { dryRun: req.query.dry === 'true' }));
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}));
 app.post('/api/admin/import', auth, admin, xlsxUpload.single('file'), wrap(async (req, res) => {
   if (!req.file) throw bad('이관 데이터 파일을 첨부하세요');
   const { importLegacy } = require('./importer');
