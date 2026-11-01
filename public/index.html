@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Frihet 업무차량 운행관리</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="login-view" class="login hidden">
+    <form id="login-form" class="login-card">
+      <div class="brand"><span class="logo">Frihet</span><span class="sub">업무차량 운행관리</span></div>
+      <label>회사 이메일<input name="email" type="email" placeholder="name@cafefrihet.com" autocomplete="username" required /></label>
+      <label>비밀번호<input name="password" type="password" autocomplete="current-password" required /></label>
+      <button class="btn primary" type="submit">로그인</button>
+      <p class="hint">@cafefrihet.com 회사 계정만 접속 가능합니다.</p>
+      <p class="err" id="login-err"></p>
+    </form>
+  </div>
+
+  <div id="app-view" class="layout hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">Frihet</span><span class="sub">Car Log</span></div>
+      <nav id="nav">
+        <a data-page="trips">차량운행일지</a>
+        <a data-page="maintenance">차량관리 및 점검일지</a>
+        <a data-page="summary">통합 합계관리</a>
+        <div class="nav-sep admin-only">관리자</div>
+        <a data-page="staff" class="admin-only">직원·차량 관리</a>
+        <a data-page="settings" class="admin-only">설정</a>
+      </nav>
+      <div class="me">
+        <div id="me-name"></div>
+        <div class="me-actions"><a id="btn-pw">비밀번호 변경</a> · <a id="btn-logout">로그아웃</a></div>
+      </div>
+    </aside>
+    <main id="main"></main>
+  </div>
+
+  <div id="modal" class="modal hidden"><div class="modal-card" id="modal-card"></div></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
