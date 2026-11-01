@@ -1,73 +1,99 @@
-// 기존 엑셀(운행일지 / 관리점검일지) 가져오기
-// 실제 엑셀 양식 확인 후 시트·열 매핑을 확정한다. (현재: 헤더 자동 인식 방식)
-const XLSX = require('xlsx');
-const { q, pool } = require('./db');
+// 기존 엑셀(SV팀 차량 운행일지 / 직원점검 관리일지)에서 추출·정규화한 이관 데이터(JSON) 적재
+// - 같은 파일을 다시 올리면 기존 엑셀 이관분(source='excel')을 지우고 다시 적재 (중복 방지)
+// - 웹에서 직접 입력한 기록(source='web')은 건드리지 않음
+const zlib = require('zlib');
+const { pool } = require('./db');
 
-const pick = (row, keys) => {
-  for (const k of Object.keys(row)) {
-    const nk = k.replace(/\s/g, '');
-    if (keys.some((x) => nk.includes(x))) return row[k];
-  }
-  return undefined;
-};
-const toDate = (v) => {
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  if (typeof v === 'number') {
-    const d = XLSX.SSF.parse_date_code(v);
-    if (d) return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
-  }
-  const m = String(v || '').match(/(\d{4})[.\-/년\s]+(\d{1,2})[.\-/월\s]+(\d{1,2})/);
-  return m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : null;
-};
-const n = (v) => {
-  const x = Number(String(v ?? '').replace(/[^\d.-]/g, ''));
-  return Number.isFinite(x) ? x : 0;
-};
+const normPlate = (p) => String(p || '').replace(/\s/g, '');
 
-async function importWorkbook(buffer, { kind, userId, dryRun }) {
-  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-  const report = { sheets: [], inserted: 0, skipped: 0 };
+function parsePayload(buf) {
+  const raw = buf[0] === 0x1f && buf[1] === 0x8b ? zlib.gunzipSync(buf) : buf;
+  const data = JSON.parse(raw.toString('utf8'));
+  if (data.version !== 1 || !Array.isArray(data.trips)) throw Object.assign(new Error('이관 데이터 형식이 올바르지 않습니다'), { status: 400 });
+  return data;
+}
+
+async function importLegacy(buf, { dryRun = false } = {}) {
+  const data = parsePayload(buf);
   const client = await pool.connect();
+  const rep = { vehicles_created: 0, vehicles_updated: 0, trips: 0, expenses: 0, maintenance: 0, unmatched_names: {}, dry_run: dryRun };
   try {
     await client.query('BEGIN');
-    for (const name of wb.SheetNames) {
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: '' });
-      let ins = 0;
-      for (const r of rows) {
-        const date = toDate(pick(r, ['일자', '날짜', '운행일', '사용일']));
-        if (!date) { report.skipped++; continue; }
-        if (kind === 'maintenance') {
-          const vehicleId = Number(r.__vehicle_id) || null;
-          if (!vehicleId) { report.skipped++; continue; }
-          await client.query(
-            `INSERT INTO maintenance(vehicle_id,user_id,maint_date,maint_type,odometer_km,description,vendor,amount,memo,source)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'excel')`,
-            [vehicleId, userId, date, String(pick(r, ['구분', '항목']) || '점검'), n(pick(r, ['주행', '계기판', '누적'])) || null,
-              String(pick(r, ['내용', '내역']) || ''), String(pick(r, ['업체', '정비소']) || ''), n(pick(r, ['금액', '비용'])),
-              String(pick(r, ['비고']) || '')]
-          );
-        } else {
-          if (!userId) throw Object.assign(new Error('운행일지 가져오기는 대상 직원을 선택해야 합니다'), { status: 400 });
-          await client.query(
-            `INSERT INTO trips(user_id,trip_date,purpose,start_name,end_name,distance_km,toll_won,fuel_cost_won,parking_won,memo,source)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'excel')`,
-            [userId, date, String(pick(r, ['목적', '업무']) || ''), String(pick(r, ['출발']) || ''), String(pick(r, ['도착', '목적지']) || ''),
-              n(pick(r, ['km', '거리', '키로'])), n(pick(r, ['통행료', '톨'])), n(pick(r, ['유류', '연료', '주유비'])),
-              n(pick(r, ['주차'])), String(pick(r, ['비고']) || '')]
-          );
-        }
-        ins++;
+    const users = (await client.query('SELECT id, name FROM users')).rows;
+    const uid = (name) => {
+      if (!name) return null;
+      const u = users.find((x) => x.name === name);
+      if (!u) rep.unmatched_names[name] = (rep.unmatched_names[name] || 0) + 1;
+      return u ? u.id : null;
+    };
+
+    // 차량
+    const vehicles = (await client.query('SELECT id, plate FROM vehicles')).rows;
+    const vid = {};
+    for (const v of vehicles) vid[normPlate(v.plate)] = v.id;
+    for (const v of data.vehicles) {
+      const key = normPlate(v.plate);
+      const owner = uid(v.owner);
+      const vals = [owner, v.ownership === 'personal' ? 'personal' : 'corporate', v.plate, v.model || null, v.fuel_type || 'gasoline', v.efficiency_km_l || null, v.active !== false];
+      if (vid[key]) {
+        await client.query(
+          `UPDATE vehicles SET user_id=COALESCE($1,user_id), ownership=$2, plate=$3, model=COALESCE($4,model), fuel_type=$5,
+             efficiency_km_l=COALESCE($6,efficiency_km_l), active=$7 WHERE id=$8`, [...vals, vid[key]]);
+        rep.vehicles_updated++;
+      } else {
+        const r = await client.query(
+          'INSERT INTO vehicles(user_id,ownership,plate,model,fuel_type,efficiency_km_l,active) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id', vals);
+        vid[key] = r.rows[0].id;
+        rep.vehicles_created++;
       }
-      report.sheets.push({ name, rows: rows.length, inserted: ins });
-      report.inserted += ins;
     }
-    if (dryRun) await client.query('ROLLBACK'); else await client.query('COMMIT');
-    report.dry_run = !!dryRun;
-    return report;
+
+    await client.query("DELETE FROM photos WHERE owner_type='expense' AND owner_id IN (SELECT id FROM expenses WHERE source='excel')");
+    await client.query("DELETE FROM photos WHERE owner_type='maintenance' AND owner_id IN (SELECT id FROM maintenance WHERE source='excel')");
+    await client.query("DELETE FROM trips WHERE source='excel'");
+    await client.query("DELETE FROM expenses WHERE source='excel'");
+    await client.query("DELETE FROM maintenance WHERE source='excel'");
+
+    for (const t of data.trips) {
+      const u = uid(t.name);
+      if (!u) continue;
+      await client.query(
+        `INSERT INTO trips(user_id,vehicle_id,trip_date,purpose,start_name,end_name,distance_km,toll_won,fuel_price_won,efficiency_km_l,fuel_cost_won,memo,source)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'excel')`,
+        [u, vid[normPlate(t.plate)] || null, t.date, t.route || null, t.start || null, t.end || null, t.km || 0, t.toll || 0,
+          t.price || null, t.eff || null, t.fuel_cost || 0, `엑셀 이관 (${t.sheet})`]
+      );
+      rep.trips++;
+    }
+    for (const e of data.expenses) {
+      const u = uid(e.name);
+      if (!u) continue;
+      await client.query(
+        `INSERT INTO expenses(user_id,expense_date,card_type,category,purpose,amount,memo,source) VALUES($1,$2,$3,$4,$5,$6,$7,'excel')`,
+        [u, e.date, e.card, e.category, e.purpose, e.amount, [e.memo, `엑셀 이관 (${e.sheet})`].filter(Boolean).join(' · ')]
+      );
+      rep.expenses++;
+    }
+    for (const m of data.maintenance) {
+      const v = vid[normPlate(m.plate)];
+      if (!v) continue;
+      const owner = (await client.query('SELECT user_id FROM vehicles WHERE id=$1', [v])).rows[0]?.user_id || null;
+      await client.query(
+        `INSERT INTO maintenance(vehicle_id,user_id,maint_date,maint_type,odometer_km,description,amount,memo,source)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,'excel')`,
+        [v, owner, m.date, m.type, m.odometer || null, m.description, m.amount || 0, [m.memo, `엑셀 이관 (${m.src})`].filter(Boolean).join(' · ')]
+      );
+      rep.maintenance++;
+    }
+    if (dryRun) await client.query('ROLLBACK');
+    else await client.query('COMMIT');
+    return rep;
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
-  } finally { client.release(); }
+  } finally {
+    client.release();
+  }
 }
 
-module.exports = { importWorkbook };
+module.exports = { importLegacy };

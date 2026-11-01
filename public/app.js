@@ -579,7 +579,7 @@ function vehicleForm(userId, v, models) {
 // ========== 설정 (관리자) ==========
 async function pageSettings() {
   const main = $('#main');
-  const [s, users] = await Promise.all([api('/api/settings'), api('/api/users?all=1')]);
+  const s = await api('/api/settings');
   const keyState = (k) => (s[k].set ? `<span class="badge ok">등록됨${s[k].from_env ? ' (환경변수)' : ''}</span>` : '<span class="badge off">미등록</span>');
   main.innerHTML = `<div class="page-head"><h1>설정</h1></div>
     <div class="card" style="display:grid;gap:12px;margin-bottom:16px"><h2>외부 연동 키</h2>
@@ -592,18 +592,17 @@ async function pageSettings() {
         <label>경유 (원/L)<input name="price_diesel" value="${esc(s.price_diesel)}"></label><label>LPG (원/L)<input name="price_lpg" value="${esc(s.price_lpg)}"></label>
         <label>전기 (원/kWh)<input name="price_ev" value="${esc(s.price_ev)}"></label></div>
       <div><button class="btn primary" id="save">저장</button></div></div>
-    <div class="card" style="display:grid;gap:12px"><h2>기존 엑셀 가져오기</h2>
-      <div class="grid3"><label>종류<select name="kind"><option value="trips">운행일지</option><option value="maintenance">관리점검일지</option></select></label>
-        <label>대상 직원<select name="user_id">${users.map((u) => `<option value="${u.id}">${userLabel(u)}</option>`).join('')}</select></label>
-        <label>엑셀 파일<input type="file" name="file" accept=".xlsx,.xls"></label></div>
-      <div class="row"><button class="btn" id="dry">미리 검사</button><button class="btn primary" id="imp">가져오기 실행</button></div><pre id="imp-out" class="note"></pre></div>`;
+    <div class="card" style="display:grid;gap:12px"><h2>기존 엑셀 데이터 이관</h2>
+      <p class="note">기존 엑셀(SV팀 차량 운행일지 · 직원점검 관리일지)에서 추출한 이관 파일(.json.gz)을 올립니다. 다시 올리면 이전 엑셀 이관분을 지우고 새로 적재합니다. 웹에서 입력한 기록은 유지됩니다.</p>
+      <label>이관 파일<input type="file" name="file" accept=".gz,.json"></label>
+      <div class="row"><button class="btn" id="dry">미리 검사</button><button class="btn primary" id="imp">이관 실행</button></div><pre id="imp-out" class="note"></pre></div>`;
   $('#save').onclick = async () => {
     const body = {}; ['kakao_rest_key', 'kakao_js_key', 'opinet_key', 'price_gasoline', 'price_diesel', 'price_lpg', 'price_ev'].forEach((k) => (body[k] = $(`[name=${k}]`, main).value));
     try { await api('/api/settings', { method: 'PUT', body }); toast('저장되었습니다'); state.jsKey = body.kakao_js_key || null; pageSettings(); } catch (e) { fail(e); }
   };
   const run = async (dry) => {
     const file = $('[name=file]', main).files[0]; if (!file) return toast('파일을 선택하세요', true);
-    const fd = new FormData(); fd.append('file', file); fd.append('kind', $('[name=kind]', main).value); fd.append('user_id', $('[name=user_id]', main).value); fd.append('dry_run', dry);
+    const fd = new FormData(); fd.append('file', file); fd.append('dry_run', dry);
     try { const r = await api('/api/admin/import', { method: 'POST', body: fd }); $('#imp-out').textContent = JSON.stringify(r, null, 2); } catch (e) { fail(e); }
   };
   $('#dry').onclick = () => run(true); $('#imp').onclick = () => run(false);

@@ -543,12 +543,11 @@ app.get('/api/public-config', auth, wrap(async (req, res) => {
   res.json({ kakao_js_key: process.env.KAKAO_JS_KEY || r.rows[0]?.value || null });
 }));
 
-// ---------- 엑셀 가져오기 (관리자) ----------
+// ---------- 기존 엑셀 이관 데이터 적재 (관리자) ----------
 app.post('/api/admin/import', auth, admin, xlsxUpload.single('file'), wrap(async (req, res) => {
-  if (!req.file) throw bad('엑셀 파일을 첨부하세요');
-  const { importWorkbook } = require('./importer');
-  const result = await importWorkbook(req.file.buffer, { kind: req.body.kind, userId: int(req.body.user_id) || null, dryRun: req.body.dry_run === 'true' });
-  res.json(result);
+  if (!req.file) throw bad('이관 데이터 파일을 첨부하세요');
+  const { importLegacy } = require('./importer');
+  res.json(await importLegacy(req.file.buffer, { dryRun: req.body.dry_run === 'true' }));
 }));
 
 // ---------- 엑셀 내보내기 ----------

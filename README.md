@@ -33,3 +33,7 @@
 npm ci
 DATABASE_URL=postgres://user:pass@localhost:5432/carlog ADMIN_PASSWORD=... COOKIE_SECURE=false npm start
 ```
+
+## 기존 엑셀 이관
+- 이관 파일(`.json.gz`)은 직원 개인정보(경로·카드내역)를 포함하므로 **저장소에 올리지 않습니다** (이 저장소는 공개).
+- 관리자 로그인 → 설정 → '기존 엑셀 데이터 이관'에서 업로드. 재업로드 시 엑셀 이관분만 교체됩니다.
