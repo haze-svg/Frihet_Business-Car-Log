@@ -52,7 +52,7 @@ const MANUAL_KEYS = {
 async function fetchOpinet(key) {
   const attempts = [];
   for (const proto of ['https', 'http']) {
-    const url = `${proto}://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=${encodeURIComponent(key)}`;
+    const url = `${proto}://www.opinet.co.kr/api/avgAllPrice.do?out=json&certkey=${encodeURIComponent(key)}`;
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
       const text = await res.text();
