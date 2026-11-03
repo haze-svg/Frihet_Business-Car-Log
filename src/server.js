@@ -265,6 +265,74 @@ app.delete('/api/vehicle-models/:id', auth, admin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- 차량 정비 상태 / 알림 ----------
+// 기준값은 회사 운영 기준(설정에서 변경). 제조사 권장 주기가 아님.
+const MAINT_DEFAULTS = { oil_km: 10000, oil_months: 12, tire_km: 20000, tire_months: 0, due_soon_pct: 85 };
+async function maintRules() {
+  const r = await q("SELECT key,value FROM settings WHERE key = ANY($1)", [Object.keys(MAINT_DEFAULTS).map((k) => 'rule_' + k)]);
+  const out = { ...MAINT_DEFAULTS };
+  for (const row of r.rows) { const n = Number(row.value); if (Number.isFinite(n) && n >= 0) out[row.key.slice(5)] = n; }
+  return out;
+}
+const monthsBetween = (a, b) => {
+  const d1 = new Date(a + 'T00:00:00Z'), d2 = new Date(b + 'T00:00:00Z');
+  return Math.round(((d2 - d1) / (30.4375 * 864e5)) * 10) / 10;
+};
+async function vehicleStatus(v, rules, today) {
+  const recent = (await q(`SELECT maint_date, maint_type, description, odometer_km FROM maintenance WHERE vehicle_id=$1 ORDER BY maint_date DESC, id DESC LIMIT 1`, [v.id])).rows[0] || null;
+  const odo = (await q(`SELECT maint_date, odometer_km FROM maintenance WHERE vehicle_id=$1 AND odometer_km IS NOT NULL ORDER BY maint_date DESC, id DESC LIMIT 1`, [v.id])).rows[0] || null;
+  const kmSince = async (date) => Number((await q('SELECT COALESCE(sum(distance_km),0) s FROM trips WHERE vehicle_id=$1 AND trip_date > $2', [v.id, date])).rows[0].s);
+  let estOdo = null;
+  if (odo) estOdo = Math.round(Number(odo.odometer_km) + (await kmSince(odo.maint_date)));
+  const firstTrip = (await q('SELECT min(trip_date) d FROM trips WHERE vehicle_id=$1', [v.id])).rows[0].d;
+
+  const check = async (kind, label, sql, kmLimit, monthLimit) => {
+    const last = (await q(`SELECT maint_date, description, odometer_km FROM maintenance WHERE vehicle_id=$1 AND (${sql}) ORDER BY maint_date DESC, id DESC LIMIT 1`, [v.id])).rows[0];
+    if (!last) {
+      return { kind, label, level: 'unknown', title: `${label} 이력 없음 · 확인 필요`,
+        reason: `관리·점검일지에 ${label} 기록이 없습니다. 마지막 교체 시점을 확인해 기록하세요.${firstTrip ? ` (이 차량 웹 운행기록 시작: ${firstTrip})` : ''}` };
+    }
+    let used = null; let basis;
+    if (last.odometer_km && estOdo != null && estOdo >= last.odometer_km) {
+      used = estOdo - last.odometer_km; basis = `교체 시 계기판 ${Number(last.odometer_km).toLocaleString()}km → 현재 추정 ${estOdo.toLocaleString()}km`;
+    } else {
+      used = Math.round(await kmSince(last.maint_date)); basis = `교체일 이후 운행일지 합산 ${used.toLocaleString()}km (업무 운행만 집계)`;
+    }
+    const months = monthsBetween(last.maint_date, today);
+    const pctKm = kmLimit ? used / kmLimit : 0;
+    const pctMo = monthLimit ? months / monthLimit : 0;
+    const pct = Math.max(pctKm, pctMo);
+    const level = pct >= 1 ? 'overdue' : pct * 100 >= rules.due_soon_pct ? 'soon' : 'ok';
+    const limits = [kmLimit ? `${kmLimit.toLocaleString()}km` : null, monthLimit ? `${monthLimit}개월` : null].filter(Boolean).join(' 또는 ');
+    const title = level === 'overdue' ? `${label} 교체 필요` : level === 'soon' ? `${label} 교체 임박` : `${label} 정상`;
+    return { kind, label, level, title, last_date: last.maint_date, last_desc: last.description, used_km: used, months, pct: Math.round(pct * 100),
+      reason: `마지막 ${label}: ${last.maint_date} (${String(last.description || '').replace(/\s+/g, ' ').slice(0, 40)}) · ${basis} · ${months}개월 경과 · 기준 ${limits} 대비 ${Math.round(pct * 100)}%` };
+  };
+  const oil = await check('oil', '엔진오일', "maint_type='엔진오일' OR description ILIKE '%엔진%오일%'", rules.oil_km, rules.oil_months);
+  const tire = await check('tire', '타이어', "(maint_type='타이어' OR description ILIKE '%타이어%') AND description ~ '(교체|교환)' AND description !~ '(위치|공기)'", rules.tire_km, rules.tire_months);
+  const due = (await q(`SELECT maint_date, maint_type, next_due_date, next_due_km FROM maintenance WHERE vehicle_id=$1 AND (next_due_date IS NOT NULL OR next_due_km IS NOT NULL) ORDER BY maint_date DESC, id DESC LIMIT 1`, [v.id])).rows[0];
+  const alerts = [oil, tire];
+  if (due) {
+    const soonDate = due.next_due_date && monthsBetween(today, due.next_due_date) <= 0.5;
+    const soonKm = due.next_due_km && estOdo != null && estOdo >= due.next_due_km - 500;
+    if (soonDate || soonKm) alerts.push({ kind: 'next', label: '예약 점검', level: 'soon', title: '다음 점검 예정',
+      reason: `${due.maint_date} ${due.maint_type} 기록의 다음 점검: ${due.next_due_date || ''}${due.next_due_km ? ' / ' + Number(due.next_due_km).toLocaleString() + 'km' : ''}` });
+  }
+  const rank = { overdue: 3, unknown: 2, soon: 1, ok: 0 };
+  const worst = alerts.reduce((a, x) => (rank[x.level] > rank[a] ? x.level : a), 'ok');
+  return { vehicle_id: v.id, est_odometer: estOdo, odometer_basis: odo ? `${odo.maint_date} 계기판 ${Number(odo.odometer_km).toLocaleString()}km + 이후 운행일지` : null,
+    recent, alerts, worst };
+}
+app.get('/api/vehicle-status', auth, wrap(async (req, res) => {
+  const rules = await maintRules();
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  const vs = (await q(`SELECT * FROM vehicles ${isAdmin(req) ? '' : 'WHERE user_id=$1'} ORDER BY id`, isAdmin(req) ? [] : [req.user.id])).rows;
+  const want = req.query.ids ? String(req.query.ids).split(',').map(int) : null;
+  const out = [];
+  for (const v of vs) if (!want || want.includes(v.id)) out.push(await vehicleStatus(v, rules, today));
+  res.json({ rules, items: out });
+}));
+
 // ---------- 외부 연동 ----------
 app.get('/api/places', auth, wrap(async (req, res) => {
   const query = String(req.query.q || '').trim();
@@ -559,7 +627,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
 }));
 
 // ---------- 설정 (관리자) ----------
-const SETTING_KEYS = ['kakao_rest_key', 'kakao_js_key', 'opinet_key', 'price_gasoline', 'price_diesel', 'price_lpg', 'price_ev'];
+const SETTING_KEYS = ['kakao_rest_key', 'kakao_js_key', 'opinet_key', 'price_gasoline', 'price_diesel', 'price_lpg', 'price_ev', 'rule_oil_km', 'rule_oil_months', 'rule_tire_km', 'rule_tire_months', 'rule_due_soon_pct'];
 const SECRET_KEYS = ['kakao_rest_key', 'opinet_key'];
 app.get('/api/settings', auth, admin, wrap(async (req, res) => {
   const r = await q('SELECT key,value FROM settings WHERE key = ANY($1)', [SETTING_KEYS]);

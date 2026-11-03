@@ -115,16 +115,61 @@ async function boot() {
   $('#me-name').innerHTML = `<b>${userLabel(state.me)}</b><br><span class="note">${esc(state.me.department || '')} ${esc(state.me.position || '')}</span>`;
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
   api('/api/public-config').then((c) => (state.jsKey = c.kakao_js_key)).catch(() => {});
-  const p = location.hash.replace('#', '') || 'trips';
-  go(p);
+  window.onhashchange = render;
+  render();
 }
-$$('#nav a').forEach((a) => (a.onclick = () => go(a.dataset.page, true)));
-function go(page, reset = false) {
-  if (reset) { state.tripUser = null; state.vehicle = null; }
-  state.page = page; location.hash = page;
+// 주소(#) 기반 화면 전환: 브라우저·마우스 뒤로가기로 이전 화면 복귀
+$$('#nav a').forEach((a) => (a.onclick = () => go(a.dataset.page)));
+function go(hash) {
+  if (location.hash === '#' + hash) render(); else location.hash = hash;
+}
+const back = (fallback) => { if (history.length > 1 && state.navCount > 1) history.back(); else go(fallback); };
+async function render() {
+  state.navCount = (state.navCount || 0) + 1;
+  const [page, kind, id] = (location.hash.replace('#', '') || 'trips').split('/');
+  state.page = page;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
+  state.tripUser = null; state.vehicle = null;
+  try {
+    if (page === 'trips' && kind === 'u' && id) {
+      state.tripUser = isAdmin() ? (await api('/api/users?all=1')).find((u) => u.id == id) : state.me;
+    }
+    if (page === 'maintenance' && kind === 'v' && id) state.vehicle = (await api('/api/vehicles')).find((v) => v.id == id) || null;
+  } catch (e) { fail(e); }
   ({ trips: pageTrips, maintenance: pageMaint, summary: pageSummary, staff: pageStaff, settings: pageSettings }[page] || pageTrips)();
+  window.scrollTo(0, 0);
 }
+const backBtn = (fallback) => `<button class="btn sm back-btn" data-back="${fallback}">← 뒤로</button>`;
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-back]'); if (b) back(b.dataset.back); });
+
+// ---------- 차량 정비 상태 표시 ----------
+const LV = { overdue: ['al-red', '교체 필요'], unknown: ['al-amber', '확인 필요'], soon: ['al-orange', '임박'], ok: ['al-green', '정상'] };
+async function vehicleStatusMap(ids) {
+  try { const r = await api('/api/vehicle-status' + (ids ? '?ids=' + ids.join(',') : '')); const m = {}; r.items.forEach((x) => (m[x.vehicle_id] = x)); return { map: m, rules: r.rules }; }
+  catch { return { map: {}, rules: null }; }
+}
+function alertChips(st) {
+  if (!st) return '<span class="note">정비 상태 데이터 확인 불가</span>';
+  return st.alerts.map((a) => `<span class="al ${LV[a.level][0]}" title="${esc(a.reason)}">${esc(a.title)}</span>`).join('');
+}
+function alertReasons(st) {
+  if (!st) return '';
+  return `<ul class="al-reasons">${st.alerts.map((a) => `<li><span class="al ${LV[a.level][0]}">${esc(a.title)}</span> ${esc(a.reason)}</li>`).join('')}</ul>`;
+}
+function vehiclePanel(v, st) {
+  const r = st?.recent;
+  return `<div class="card veh-panel lv-${st?.worst || 'ok'}">
+    <div class="row" style="justify-content:space-between"><div class="row"><b style="font-size:17px">${esc(v.plate)}</b>
+      <span class="badge ${v.ownership === 'corporate' ? 'corp' : 'pers'}">${OWN[v.ownership]}</span>${v.active ? '' : '<span class="badge off">미사용</span>'}</div>
+      <button class="btn sm" data-gov="${v.id}">관리·점검일지 →</button></div>
+    <div class="veh-specs"><div><span>차종</span><b>${esc(v.model || '미입력')}</b></div><div><span>유종</span><b>${FUEL[v.fuel_type]}</b></div>
+      <div><span>공식연비</span><b>${v.efficiency_km_l ? v.efficiency_km_l + ' km/L' : '미등록'}</b></div>
+      <div><span>추정 주행거리</span><b>${st?.est_odometer != null ? won(st.est_odometer) + ' km' : '데이터 확인 불가'}</b></div>
+      <div><span>최근 정비</span><b>${r ? `${r.maint_date} ${esc(r.maint_type)}` : '기록 없음'}</b></div></div>
+    <div class="row">${alertChips(st)}</div>
+    <details><summary class="note">알림 사유 보기</summary>${alertReasons(st)}${st?.odometer_basis ? `<div class="note">주행거리 추정 근거: ${esc(st.odometer_basis)}</div>` : ''}</details></div>`;
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-gov]'); if (b) go('maintenance/v/' + b.dataset.gov); });
 
 // ========== 차량운행일지 ==========
 async function pageTrips() {
@@ -136,22 +181,32 @@ async function pageTrips() {
     users.forEach((u) => (groups[u.department || '미지정'] ||= []).push(u));
     main.innerHTML = `<div class="page-head"><h1>차량운행일지</h1></div><p class="note">직원을 선택하세요.</p>` +
       Object.entries(groups).map(([d, list]) => `<div class="dept-title">${esc(d)}</div><div class="cards">${list.map((u) => `
-        <div class="card pick" data-uid="${u.id}"><div class="t">${userLabel(u)}</div>
+        <div class="card pick" data-uid="${u.id}"><div class="row" style="justify-content:space-between"><div class="t">${userLabel(u)}</div>${isAdmin() ? `<button class="btn sm" data-uedit="${u.id}">수정</button>` : ''}</div>
         <div class="s">${esc(u.position || '')} · ${u.vehicles.map((v) => `${esc(v.plate)} (${OWN[v.ownership]})`).join(', ') || '차량 미등록'}</div></div>`).join('')}</div>`).join('');
-    $$('[data-uid]', main).forEach((el) => (el.onclick = () => { state.tripUser = users.find((u) => u.id == el.dataset.uid); pageTrips(); }));
+    $$('[data-uid]', main).forEach((el) => (el.onclick = (ev) => {
+      if (ev.target.closest('[data-uedit]')) return;
+      go('trips/u/' + el.dataset.uid);
+    }));
+    $$('[data-uedit]', main).forEach((b) => (b.onclick = async (ev) => {
+      ev.stopPropagation();
+      const [all, models] = await Promise.all([api('/api/users?all=1'), api('/api/vehicle-models')]);
+      userForm(all.find((x) => x.id == b.dataset.uedit), models, pageTrips);
+    }));
     return;
   }
   const u = state.tripUser;
   const qs = `user_id=${u.id}&${rq()}`;
   const [trips, exps, vehicles] = await Promise.all([api(`/api/trips?${qs}`), api(`/api/expenses?${qs}`), api('/api/vehicles')]);
   const myVehicles = vehicles.filter((v) => v.user_id === u.id && v.active);
+  const vst = myVehicles.length ? await vehicleStatusMap(myVehicles.map((v) => v.id)) : { map: {} };
   const t = trips.reduce((a, r) => ({ km: a.km + Number(r.distance_km), toll: a.toll + r.toll_won, fuel: a.fuel + r.fuel_cost_won, park: a.park + r.parking_won }), { km: 0, toll: 0, fuel: 0, park: 0 });
   const e = exps.reduce((a, r) => { if (r.card_type in a) a[r.card_type] += r.amount; return a; }, { corporate: 0, personal: 0 });
 
   main.innerHTML = `
-    <div class="crumb">${isAdmin() ? '<a id="back">차량운행일지</a> / ' : ''}${userLabel(u)}</div>
-    <div class="page-head"><h1>${userLabel(u)} 운행일지</h1><div class="grow"></div>${rangeControls(pageTrips)}
+    <div class="crumb">${isAdmin() ? `${backBtn('trips')} <a id="back">차량운행일지</a> / ` : ''}${userLabel(u)}</div>
+    <div class="page-head"><h1>${userLabel(u)} 운행일지</h1>${isAdmin() ? '<button class="btn sm" id="u-edit">직원·차량 수정</button>' : ''}<div class="grow"></div>${rangeControls(pageTrips)}
       <a class="btn" href="/api/export?${qs}">엑셀 다운로드</a></div>
+    <div class="veh-panels">${myVehicles.map((v) => vehiclePanel(v, vst.map[v.id])).join('') || '<div class="card note">등록된 사용 차량이 없습니다.</div>'}</div>
     <div class="kpis">
       <div class="kpi"><div class="l">운행 횟수</div><div class="v">${trips.length}회</div></div>
       <div class="kpi"><div class="l">운행 거리</div><div class="v">${km(t.km)} km</div></div>
@@ -162,7 +217,11 @@ async function pageTrips() {
     </div>
     <div class="tabs"><a data-tab="trips">운행 기록 (${trips.length})</a><a data-tab="expenses">카드 사용 (${exps.length})</a></div>
     <div id="tab-body"></div>`;
-  $('#back')?.addEventListener('click', () => { state.tripUser = null; pageTrips(); });
+  $('#back')?.addEventListener('click', () => go('trips'));
+  $('#u-edit')?.addEventListener('click', async () => {
+    const [all, models] = await Promise.all([api('/api/users?all=1'), api('/api/vehicle-models')]);
+    userForm(all.find((x) => x.id === u.id), models, render);
+  });
   $('#kpi-card').onclick = () => { state.tab = 'expenses'; renderTab(); $('.tabs').scrollIntoView({ behavior: 'smooth' }); };
   const renderTab = () => {
     $$('.tabs a', main).forEach((a) => a.classList.toggle('active', a.dataset.tab === state.tab));
@@ -558,18 +617,32 @@ async function pageMaint() {
   const main = $('#main');
   const vehicles = await api('/api/vehicles');
   if (!state.vehicle) {
-    main.innerHTML = `<div class="page-head"><h1>차량관리 및 점검일지</h1></div><p class="note">차량을 선택하세요.</p>
-      <div class="cards">${vehicles.map((v) => `<div class="card pick" data-vid="${v.id}"><div class="t">${esc(v.plate)} ${v.active ? '' : '<span class="badge off">미사용</span>'}</div>
-      <div class="s">${esc(v.model || '차종 미입력')} · ${FUEL[v.fuel_type]} · <span class="badge ${v.ownership === 'corporate' ? 'corp' : 'pers'}">${OWN[v.ownership]}</span></div>
-      <div class="s">${v.user_name ? esc(v.user_name) + (v.user_nickname ? `(${esc(v.user_nickname)})` : '') : '담당자 없음'}</div></div>`).join('') || '<div class="empty">등록된 차량이 없습니다</div>'}</div>`;
-    $$('[data-vid]', main).forEach((el) => (el.onclick = () => { state.vehicle = vehicles.find((v) => v.id == el.dataset.vid); pageMaint(); }));
+    const { map, rules } = await vehicleStatusMap();
+    const order = { overdue: 0, unknown: 1, soon: 2, ok: 3 };
+    const list = [...vehicles].sort((a, b) => (b.active - a.active) || (order[map[a.id]?.worst] ?? 9) - (order[map[b.id]?.worst] ?? 9));
+    const cnt = (lv) => vehicles.filter((v) => v.active && map[v.id]?.alerts.some((a) => a.level === lv)).length;
+    main.innerHTML = `<div class="page-head"><h1>차량관리 및 점검일지</h1></div>
+      <div class="kpis"><div class="kpi"><div class="l">교체 필요 차량</div><div class="v" style="color:#b23b3b">${cnt('overdue')}대</div></div>
+        <div class="kpi"><div class="l">이력 확인 필요</div><div class="v" style="color:#a86b00">${cnt('unknown')}대</div></div>
+        <div class="kpi"><div class="l">교체 임박</div><div class="v" style="color:#c26a1b">${cnt('soon')}대</div></div>
+        <div class="kpi"><div class="l">사용 차량</div><div class="v">${vehicles.filter((v) => v.active).length}대</div></div></div>
+      ${rules ? `<p class="note">알림 기준: 엔진오일 ${won(rules.oil_km)}km 또는 ${rules.oil_months}개월 · 타이어 ${won(rules.tire_km)}km${rules.tire_months ? ' 또는 ' + rules.tire_months + '개월' : ''} · ${rules.due_soon_pct}% 도달 시 임박 (회사 운영 기준, 설정에서 변경)</p>` : ''}
+      <div class="veh-board">${list.map((v) => `<div class="card pick veh-card lv-${map[v.id]?.worst || 'ok'}" data-vid="${v.id}">
+        <div class="row" style="justify-content:space-between"><div><b style="font-size:17px">${esc(v.plate)}</b> ${v.active ? '' : '<span class="badge off">미사용</span>'}</div>
+          <span class="badge ${v.ownership === 'corporate' ? 'corp' : 'pers'}">${OWN[v.ownership]}</span></div>
+        <div class="s">${esc(v.model || '차종 미입력')} · ${FUEL[v.fuel_type]} · ${v.efficiency_km_l ? v.efficiency_km_l + 'km/L' : '연비 미등록'} · ${v.user_name ? esc(v.user_name) + (v.user_nickname ? `(${esc(v.user_nickname)})` : '') : '담당자 없음'}</div>
+        <div class="s">추정 주행거리 <b>${map[v.id]?.est_odometer != null ? won(map[v.id].est_odometer) + 'km' : '확인 불가'}</b> · 최근 정비 <b>${map[v.id]?.recent ? map[v.id].recent.maint_date + ' ' + esc(map[v.id].recent.maint_type) : '없음'}</b></div>
+        <div class="row">${alertChips(map[v.id])}</div>
+        ${map[v.id] ? `<div class="al-why">${map[v.id].alerts.filter((a) => a.level !== 'ok').map((a) => `<div>· <b>${esc(a.title)}</b>: ${esc(a.reason)}</div>`).join('')}</div>` : ''}
+      </div>`).join('') || '<div class="empty">등록된 차량이 없습니다</div>'}</div>`;
+    $$('[data-vid]', main).forEach((el) => (el.onclick = () => go('maintenance/v/' + el.dataset.vid)));
     return;
   }
   const v = state.vehicle;
-  const rows = await api(`/api/maintenance?vehicle_id=${v.id}&${rq()}`);
+  const [rows, vs1] = await Promise.all([api(`/api/maintenance?vehicle_id=${v.id}&${rq()}`), vehicleStatusMap([v.id])]);
   const total = rows.reduce((a, r) => a + r.amount, 0);
   const lastOdo = rows.find((r) => r.odometer_km)?.odometer_km;
-  main.innerHTML = `<div class="crumb"><a id="back">차량관리 및 점검일지</a> / ${esc(v.plate)}</div>
+  main.innerHTML = `<div class="crumb">${backBtn('maintenance')} <a id="back">차량관리 및 점검일지</a> / ${esc(v.plate)}</div>
     <div class="page-head"><h1>${esc(v.plate)} <span class="badge ${v.ownership === 'corporate' ? 'corp' : 'pers'}">${OWN[v.ownership]}</span></h1><div class="grow"></div>${rangeControls(pageMaint)}</div>
     <div class="kpis"><div class="kpi"><div class="l">차종 / 유종</div><div class="v" style="font-size:15px">${esc(v.model || '-')} / ${FUEL[v.fuel_type]}</div></div>
       <div class="kpi"><div class="l">공식연비</div><div class="v">${v.efficiency_km_l ? v.efficiency_km_l + ' km/L' : '데이터 확인 불가'}</div></div>
@@ -582,7 +655,9 @@ async function pageMaint() {
       <td class="n">${won(r.amount)}</td><td>${r.next_due_date ? r.next_due_date.slice(0, 10) : ''}${r.next_due_km ? ' / ' + won(r.next_due_km) + 'km' : ''}</td>
       <td>${thumbs(r.photos)}</td><td>${esc(r.user_name || '')}</td><td><button class="btn sm" data-edit="${r.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="11" class="empty">기록 없음</td></tr>'}</tbody>
     <tfoot><tr><td colspan="6">합계</td><td class="n">${won(total)}</td><td colspan="4"></td></tr></tfoot></table></div>`;
-  $('#back').onclick = () => { state.vehicle = null; pageMaint(); };
+  $('#back').onclick = () => go('maintenance');
+  $('.kpis', main).insertAdjacentHTML('beforebegin', vehiclePanel(v, vs1.map[v.id]).replace('<button class="btn sm" data-gov="' + v.id + '">관리·점검일지 →</button>', ''));
+  $('.veh-panel details', main)?.setAttribute('open', '');
   $('#add').onclick = () => maintForm(v, null);
   $$('[data-edit]', main).forEach((b) => (b.onclick = () => maintForm(v, rows.find((x) => x.id == b.dataset.edit))));
 }
@@ -654,7 +729,7 @@ async function pageSummary() {
       <tbody>${data.monthly.map((m) => `<tr><td>${m.ym}</td><td class="n">${km(m.distance_km)}</td><td class="n">${won(m.fuel_cost_won)}</td><td class="n">${won(m.toll_won)}</td><td class="n">${won(m.operating_cost_won)}</td><td class="n">${won(m.fueling_won)}</td><td class="n">${won(m.corporate_card_won)}</td><td class="n">${won(m.personal_card_won)}</td></tr>`).join('')}</tbody></table></div>`;
   $$('[data-uid]', main).forEach((tr) => (tr.onclick = async () => {
     if (!isAdmin()) return go('trips');
-    const all = await api('/api/users?all=1'); state.tripUser = all.find((u) => u.id == tr.dataset.uid); go('trips');
+    go('trips/u/' + tr.dataset.uid);
   }));
   $('#sel-all')?.addEventListener('click', () => { state.sumUsers = []; pageSummary(); });
   $$('.card input[type=checkbox]', main).forEach((cb) => (cb.onchange = () => {
@@ -723,7 +798,7 @@ const vehicleBody = (c) => ({
   ownership: $('[name=ownership]:checked', c)?.value, plate: $('[name=plate]', c).value, model: $('[name=model]', c).value,
   fuel_type: $('[name=fuel_type]', c).value, efficiency_km_l: $('[name=efficiency_km_l]', c).value,
 });
-function userForm(u, models) {
+function userForm(u, models, done = pageStaff) {
   const c = openModal(`<h2>${u ? '직원·차량 정보 수정' : '새 직원 추가'}</h2>
     <div class="grid2"><label>이름<input name="name" value="${esc(u?.name || '')}"></label><label>닉네임<input name="nickname" value="${esc(u?.nickname || '')}"></label></div>
     <div class="grid3"><label>부서<input name="department" value="${esc(u?.department || '')}" list="dept-list"><datalist id="dept-list"><option value="운영팀"><option value="물류팀"><option value="인테리어팀"><option value="브랜드마케팅팀"></datalist></label>
@@ -751,7 +826,7 @@ function userForm(u, models) {
       }
       if (r.temp_password) openModal(`<h2>직원 등록 완료</h2><p>초기 비밀번호를 직원에게 전달하세요. 최초 로그인 시 변경해야 합니다. 이 창을 닫으면 다시 볼 수 없습니다.</p><input readonly value="${esc(r.temp_password)}" onclick="this.select()"><div class="modal-actions"><button class="btn primary" data-close>확인</button></div>`);
       else closeModal();
-      pageStaff();
+      done();
     } catch (e) { fail(e); }
   };
 }
@@ -781,13 +856,20 @@ async function pageSettings() {
       <div class="grid3" style="grid-template-columns:repeat(4,1fr)"><label>휘발유 (원/L)<input name="price_gasoline" value="${esc(s.price_gasoline)}"></label>
         <label>경유 (원/L)<input name="price_diesel" value="${esc(s.price_diesel)}"></label><label>LPG (원/L)<input name="price_lpg" value="${esc(s.price_lpg)}"></label>
         <label>전기 (원/kWh)<input name="price_ev" value="${esc(s.price_ev)}"></label></div>
+      <h2>정비 알림 기준 (회사 운영 기준)</h2>
+      <div class="grid3" style="grid-template-columns:repeat(5,1fr)"><label>엔진오일 주기 (km)<input name="rule_oil_km" placeholder="10000" value="${esc(s.rule_oil_km)}"></label>
+        <label>엔진오일 주기 (개월)<input name="rule_oil_months" placeholder="12" value="${esc(s.rule_oil_months)}"></label>
+        <label>타이어 교체 주기 (km)<input name="rule_tire_km" placeholder="20000" value="${esc(s.rule_tire_km)}"></label>
+        <label>타이어 주기 (개월, 0=미사용)<input name="rule_tire_months" placeholder="0" value="${esc(s.rule_tire_months)}"></label>
+        <label>임박 알림 (%)<input name="rule_due_soon_pct" placeholder="85" value="${esc(s.rule_due_soon_pct)}"></label></div>
+      <p class="note">비워두면 기본값(엔진오일 10,000km/12개월, 타이어 20,000km, 85%)을 사용합니다. 차량 제조사 권장 주기는 차종별로 다르므로 확인 후 조정하세요.</p>
       <div class="row"><button class="btn primary" id="save">저장</button><button class="btn" id="opi-test">오피넷 연결 테스트</button></div><pre id="opi-out" class="note"></pre></div>
     <div class="card" style="display:grid;gap:12px"><h2>기존 엑셀 데이터 이관</h2>
       <p class="note">기존 엑셀(SV팀 차량 운행일지 · 직원점검 관리일지)에서 추출한 이관 파일(.json.gz)을 올립니다. 다시 올리면 이전 엑셀 이관분을 지우고 새로 적재합니다. 웹에서 입력한 기록은 유지됩니다.</p>
       <label>이관 파일 (.zip / .json.gz)<input type="file" name="file" accept=".zip,.gz,.json"></label>
       <div class="row"><button class="btn" id="dry">미리 검사</button><button class="btn primary" id="imp">이관 실행</button></div><pre id="imp-out" class="note"></pre></div>`;
   $('#save').onclick = async () => {
-    const body = {}; ['kakao_rest_key', 'kakao_js_key', 'opinet_key', 'price_gasoline', 'price_diesel', 'price_lpg', 'price_ev'].forEach((k) => (body[k] = $(`[name=${k}]`, main).value));
+    const body = {}; ['kakao_rest_key', 'kakao_js_key', 'opinet_key', 'price_gasoline', 'price_diesel', 'price_lpg', 'price_ev', 'rule_oil_km', 'rule_oil_months', 'rule_tire_km', 'rule_tire_months', 'rule_due_soon_pct'].forEach((k) => (body[k] = $(`[name=${k}]`, main).value));
     try { await api('/api/settings', { method: 'PUT', body }); toast('저장되었습니다'); state.jsKey = body.kakao_js_key || null; pageSettings(); } catch (e) { fail(e); }
   };
   const run = async (dry) => {

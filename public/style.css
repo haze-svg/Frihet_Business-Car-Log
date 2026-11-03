@@ -145,7 +145,25 @@ h3.sec { font-size: 15px; margin: 10px 0 0; padding-top: 12px; border-top: 1px s
 .thumbs.big { flex-wrap: wrap; }
 .kpi.pick { cursor: pointer; } .kpi.pick:hover { border-color: var(--accent); }
 
+.back-btn { margin-right: 6px; }
+.al { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; margin: 2px 4px 2px 0; cursor: help; }
+.al-red { background: #fbe1e1; color: #b23b3b; } .al-amber { background: #fff1cc; color: #8a5a00; }
+.al-orange { background: #fde8d4; color: #b5590f; } .al-green { background: #e2f0e5; color: #3d7a4b; }
+.al-reasons { margin: 8px 0 0; padding-left: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; }
+.veh-panels { display: grid; gap: 10px; margin-bottom: 14px; }
+.veh-panel { display: grid; gap: 10px; border-left: 5px solid #cfd8cf; }
+.veh-specs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.veh-specs div { display: grid; gap: 2px; } .veh-specs span { font-size: 11px; color: var(--muted); }
+.lv-overdue { border-left: 5px solid #b23b3b !important; } .lv-unknown { border-left: 5px solid #d9a400 !important; }
+.lv-soon { border-left: 5px solid #e08a3c !important; } .lv-ok { border-left: 5px solid #8fbf96 !important; }
+.veh-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
+.veh-card { display: grid; gap: 8px; padding: 16px; }
+.al-why { font-size: 12px; color: var(--ink); background: #faf6f0; border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
+.al-why:empty { display: none; }
+
 @media (max-width: 860px) {
+  .veh-specs { grid-template-columns: 1fr 1fr; }
+  .veh-board { grid-template-columns: 1fr; }
   .leg-nums { grid-template-columns: 1fr 1fr; }
   .exp-grid { grid-template-columns: 1fr 1fr; }
   .day-sum { grid-template-columns: 1fr 1fr; }
