@@ -538,6 +538,12 @@ app.put('/api/settings', auth, admin, wrap(async (req, res) => {
   }
   res.json({ ok: true });
 }));
+app.get('/api/admin/opinet-test', auth, admin, wrap(async (req, res) => {
+  const key = await ext.getSetting('opinet_key');
+  if (!key) return res.json({ ok: false, reason: '오피넷 키 미등록' });
+  const t = await ext.fetchOpinet(key);
+  res.json(t.ok ? { ok: true, prices: t.rows.map((r) => ({ code: r.PRODCD, name: r.PRODNM, price: r.PRICE, date: r.TRADE_DT })) } : t);
+}));
 app.get('/api/public-config', auth, wrap(async (req, res) => {
   const r = await q("SELECT value FROM settings WHERE key='kakao_js_key'");
   res.json({ kakao_js_key: process.env.KAKAO_JS_KEY || r.rows[0]?.value || null });

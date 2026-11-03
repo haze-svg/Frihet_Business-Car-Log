@@ -545,13 +545,20 @@ const vehicleBody = (c) => ({
   fuel_type: $('[name=fuel_type]', c).value, efficiency_km_l: $('[name=efficiency_km_l]', c).value,
 });
 function userForm(u, models) {
-  const c = openModal(`<h2>${u ? '직원 정보 수정' : '새 직원 추가'}</h2>
+  const c = openModal(`<h2>${u ? '직원·차량 정보 수정' : '새 직원 추가'}</h2>
     <div class="grid2"><label>이름<input name="name" value="${esc(u?.name || '')}"></label><label>닉네임<input name="nickname" value="${esc(u?.nickname || '')}"></label></div>
     <div class="grid3"><label>부서<input name="department" value="${esc(u?.department || '')}" list="dept-list"><datalist id="dept-list"><option value="운영팀"><option value="물류팀"><option value="인테리어팀"><option value="브랜드마케팅팀"></datalist></label>
       <label>직책<input name="position" value="${esc(u?.position || '')}"></label>
       <label>권한<select name="role"><option value="user">직원</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>관리자</option></select></label></div>
     <label>회사 이메일 (@cafefrihet.com)<input name="email" type="email" value="${esc(u?.email || '')}"></label>
-    ${u ? '' : `<h2 style="margin-top:6px">차량 등록</h2>${vehicleFields(null, models)}<p class="note">차량번호를 비워두면 차량 없이 등록됩니다. 초기 비밀번호는 저장 후 화면에 표시됩니다.</p>`}
+    ${u ? `<h2 style="margin-top:6px">등록 차량</h2>${(u.vehicles || []).map((v) => `<div class="card veh-edit" data-vid="${v.id}" style="display:grid;gap:8px;padding:12px">
+        <div class="grid3"><label>차량번호<input name="v_plate" value="${esc(v.plate)}"></label>
+          <label>구분<select name="v_ownership">${Object.entries(OWN).map(([k, l]) => `<option value="${k}" ${v.ownership === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label>유종<select name="v_fuel">${Object.entries(FUEL).map(([k, l]) => `<option value="${k}" ${v.fuel_type === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+        <div class="grid3"><label>차종<input name="v_model" value="${esc(v.model || '')}"></label>
+          <label>공식연비 (km/L)<input name="v_eff" inputmode="decimal" value="${v.efficiency_km_l ?? ''}"></label>
+          <label class="inline" style="font-size:13px;color:var(--ink);align-self:end"><input type="checkbox" name="v_active" style="width:auto" ${v.active ? 'checked' : ''}> 사용 중</label></div></div>`).join('') || '<p class="note">등록된 차량 없음 (목록의 "+ 차량 추가" 사용)</p>'}`
+      : `<h2 style="margin-top:6px">차량 등록</h2>${vehicleFields(null, models)}<p class="note">차량번호를 비워두면 차량 없이 등록됩니다. 초기 비밀번호는 저장 후 화면에 표시됩니다.</p>`}
     <div class="modal-actions"><button class="btn" data-close>취소</button><button class="btn primary" id="save">저장</button></div>`);
   if (!u) bindVehicleFields(c, models);
   $('#save', c).onclick = async () => {
@@ -559,6 +566,10 @@ function userForm(u, models) {
     if (!u) body.vehicle = vehicleBody(c);
     try {
       const r = await api(u ? `/api/users/${u.id}` : '/api/users', { method: u ? 'PUT' : 'POST', body });
+      if (u) for (const box of $$('.veh-edit', c)) {
+        const g = (n) => $(`[name=${n}]`, box);
+        await api(`/api/vehicles/${box.dataset.vid}`, { method: 'PUT', body: { user_id: u.id, plate: g('v_plate').value, ownership: g('v_ownership').value, fuel_type: g('v_fuel').value, model: g('v_model').value, efficiency_km_l: g('v_eff').value, active: g('v_active').checked } });
+      }
       if (r.temp_password) openModal(`<h2>직원 등록 완료</h2><p>초기 비밀번호를 직원에게 전달하세요. 최초 로그인 시 변경해야 합니다. 이 창을 닫으면 다시 볼 수 없습니다.</p><input readonly value="${esc(r.temp_password)}" onclick="this.select()"><div class="modal-actions"><button class="btn primary" data-close>확인</button></div>`);
       else closeModal();
       pageStaff();
@@ -591,7 +602,7 @@ async function pageSettings() {
       <div class="grid3" style="grid-template-columns:repeat(4,1fr)"><label>휘발유 (원/L)<input name="price_gasoline" value="${esc(s.price_gasoline)}"></label>
         <label>경유 (원/L)<input name="price_diesel" value="${esc(s.price_diesel)}"></label><label>LPG (원/L)<input name="price_lpg" value="${esc(s.price_lpg)}"></label>
         <label>전기 (원/kWh)<input name="price_ev" value="${esc(s.price_ev)}"></label></div>
-      <div><button class="btn primary" id="save">저장</button></div></div>
+      <div class="row"><button class="btn primary" id="save">저장</button><button class="btn" id="opi-test">오피넷 연결 테스트</button></div><pre id="opi-out" class="note"></pre></div>
     <div class="card" style="display:grid;gap:12px"><h2>기존 엑셀 데이터 이관</h2>
       <p class="note">기존 엑셀(SV팀 차량 운행일지 · 직원점검 관리일지)에서 추출한 이관 파일(.json.gz)을 올립니다. 다시 올리면 이전 엑셀 이관분을 지우고 새로 적재합니다. 웹에서 입력한 기록은 유지됩니다.</p>
       <label>이관 파일 (.zip / .json.gz)<input type="file" name="file" accept=".zip,.gz,.json"></label>
@@ -615,6 +626,10 @@ async function pageSettings() {
       out.textContent = (dry ? '[미리 검사 · 저장 안 됨]\n' : '[이관 완료]\n') + JSON.stringify(r, null, 2);
     } catch (e) { fail(e); out.textContent = '실패: ' + e.message; }
     $$('#dry,#imp', main).forEach((b) => (b.disabled = false));
+  };
+  $('#opi-test').onclick = async () => {
+    $('#opi-out').textContent = '조회 중…';
+    try { $('#opi-out').textContent = JSON.stringify(await api('/api/admin/opinet-test'), null, 2); } catch (e) { $('#opi-out').textContent = '실패: ' + e.message; }
   };
   $('#dry').onclick = () => run(true); $('#imp').onclick = () => run(false);
 }

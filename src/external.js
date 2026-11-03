@@ -48,6 +48,25 @@ const MANUAL_KEYS = {
   gasoline: 'price_gasoline', diesel: 'price_diesel', lpg: 'price_lpg', ev: 'price_ev', hybrid: 'price_gasoline',
 };
 
+// 오피넷 전국평균 조회 (https → http 순서로 시도, 실패 사유 기록)
+async function fetchOpinet(key) {
+  const attempts = [];
+  for (const proto of ['https', 'http']) {
+    const url = `${proto}://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=${encodeURIComponent(key)}`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const text = await res.text();
+      let rows = null;
+      try { rows = JSON.parse(text)?.RESULT?.OIL || null; } catch (_) { /* not json */ }
+      if (res.ok && Array.isArray(rows) && rows.length) return { ok: true, rows, attempts };
+      attempts.push({ proto, status: res.status, body: text.slice(0, 200) });
+    } catch (e) {
+      attempts.push({ proto, error: String(e.cause?.code || e.cause?.message || e.message) });
+    }
+  }
+  return { ok: false, attempts };
+}
+
 async function fuelPrice(fuelType) {
   const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
   const lookupType = fuelType === 'hybrid' ? 'gasoline' : fuelType;
@@ -56,32 +75,22 @@ async function fuelPrice(fuelType) {
 
   const key = await getSetting('opinet_key');
   if (key && OPINET_CODES[lookupType]) {
-    try {
-      let res = null;
-      for (const proto of ['https', 'http']) {
-        try {
-          res = await fetch(`${proto}://www.opinet.co.kr/api/avgAllPrice.do?out=json&code=${encodeURIComponent(key)}`);
-          if (res.ok) break;
-        } catch (_) { res = null; }
-      }
-      if (res && res.ok) {
-        const data = await res.json();
-        const rows = data?.RESULT?.OIL || [];
-        for (const [t, code] of Object.entries(OPINET_CODES)) {
-          const row = rows.find((o) => o.PRODCD === code);
-          if (row) {
-            await q(
-              `INSERT INTO fuel_prices(price_date,fuel_type,price_won,source) VALUES($1,$2,$3,'opinet')
-               ON CONFLICT (price_date,fuel_type) DO UPDATE SET price_won=EXCLUDED.price_won, source='opinet'`,
-              [today, t, Number(row.PRICE)]
-            );
-          }
+    const t = await fetchOpinet(key);
+    if (t.ok) {
+      for (const [ft, code] of Object.entries(OPINET_CODES)) {
+        const row = t.rows.find((o) => o.PRODCD === code);
+        if (row) {
+          await q(
+            `INSERT INTO fuel_prices(price_date,fuel_type,price_won,source) VALUES($1,$2,$3,'opinet')
+             ON CONFLICT (price_date,fuel_type) DO UPDATE SET price_won=EXCLUDED.price_won, source='opinet'`,
+            [today, ft, Number(row.PRICE)]
+          );
         }
-        const again = await q('SELECT price_won FROM fuel_prices WHERE price_date=$1 AND fuel_type=$2', [today, lookupType]);
-        if (again.rows[0]) return { price: Number(again.rows[0].price_won), source: 'opinet', date: today };
       }
-    } catch (e) {
-      console.warn('[opinet] 조회 실패:', e.message);
+      const again = await q('SELECT price_won FROM fuel_prices WHERE price_date=$1 AND fuel_type=$2', [today, lookupType]);
+      if (again.rows[0]) return { price: Number(again.rows[0].price_won), source: 'opinet', date: today };
+    } else {
+      console.warn('[opinet] 조회 실패:', JSON.stringify(t.attempts));
     }
   }
   const manual = await getSetting(MANUAL_KEYS[fuelType] || 'price_gasoline');
@@ -89,4 +98,4 @@ async function fuelPrice(fuelType) {
   return { price: null, source: 'none', date: today };
 }
 
-module.exports = { searchPlaces, route, fuelPrice, getSetting };
+module.exports = { searchPlaces, route, fuelPrice, getSetting, fetchOpinet };
