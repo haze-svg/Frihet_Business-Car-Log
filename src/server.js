@@ -1,4 +1,6 @@
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const express = require('express');
 const cookieParser = require('cookie-parser');
@@ -551,8 +553,6 @@ app.get('/api/public-config', auth, wrap(async (req, res) => {
 
 // ---------- 기존 엑셀 이관 데이터 적재 (관리자) ----------
 // 대용량 패키지는 브라우저에서 4MB 단위로 나눠 전송 (프록시 업로드 한도 회피)
-const fs = require('fs');
-const os = require('os');
 app.post('/api/admin/import-chunk', auth, admin, express.raw({ type: '*/*', limit: '8mb' }), wrap(async (req, res) => {
   const id = String(req.query.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 40);
   const index = int(req.query.index, -1), total = int(req.query.total, 0);
@@ -594,8 +594,17 @@ app.get('/api/export', auth, wrap(async (req, res) => {
 }));
 
 // ---------- static ----------
-app.use(express.static(path.join(__dirname, '..', 'public'), { index: 'index.html', maxAge: '1h' }));
-app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
+// 재배포 직후에도 새 화면이 바로 보이도록: index.html은 캐시 금지, js/css는 내용 해시로 버전 부여
+const PUB = path.join(__dirname, '..', 'public');
+const assetVer = require('crypto').createHash('sha1')
+  .update(fs.readFileSync(path.join(PUB, 'app.js'))).update(fs.readFileSync(path.join(PUB, 'style.css')))
+  .digest('hex').slice(0, 10);
+const indexHtml = fs.readFileSync(path.join(PUB, 'index.html'), 'utf8')
+  .replace('/app.js', `/app.js?v=${assetVer}`).replace('/style.css', `/style.css?v=${assetVer}`);
+const sendIndex = (req, res) => { res.set('Cache-Control', 'no-cache, no-store, must-revalidate'); res.type('html').send(indexHtml); };
+app.get(['/', '/index.html'], sendIndex);
+app.use(express.static(PUB, { index: false, maxAge: '30d' }));
+app.get(/^\/(?!api\/).*/, sendIndex);
 
 app.use((err, req, res, next) => {
   const status = err.status || (err.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
