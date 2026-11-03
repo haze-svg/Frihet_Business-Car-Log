@@ -26,6 +26,7 @@ async function api(path, opts = {}) {
   const res = await fetch(path, o);
   if (res.status === 401 && !path.startsWith('/api/auth')) { showLogin(); throw new Error('로그인이 필요합니다'); }
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+  if (res.status === 403 && data?.must_change && !state.forcedPw) changePassword(true);
   if (!res.ok) throw new Error(data?.error || `요청 실패 (${res.status})`);
   return data;
 }
@@ -41,7 +42,7 @@ function openModal(html, wide = false) {
   return c;
 }
 function closeModal() { $('#modal').classList.add('hidden'); $('#modal-card').innerHTML = ''; }
-$('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') closeModal(); });
+$('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal' && !state.forcedPw) closeModal(); });
 function lightbox(src) {
   const d = document.createElement('div'); d.className = 'lightbox'; d.innerHTML = `<img src="${src}">`;
   d.onclick = () => d.remove(); document.body.appendChild(d);
@@ -91,21 +92,27 @@ $('#login-form').onsubmit = async (e) => {
   try {
     const r = await api('/api/auth/login', { method: 'POST', body: { email: f.get('email'), password: f.get('password') } });
     await boot();
-    if (r.must_change_password) changePassword(true);
   } catch (err) { $('#login-err').textContent = err.message; }
 };
 $('#btn-logout').onclick = async () => { await api('/api/auth/logout', { method: 'POST' }); location.reload(); };
 $('#btn-pw').onclick = () => changePassword(false);
 function changePassword(forced) {
-  const c = openModal(`<h2>비밀번호 변경</h2>${forced ? '<p class="warn">최초 로그인입니다. 비밀번호를 변경하세요.</p>' : ''}
+  state.forcedPw = !!forced;
+  const c = openModal(`<h2>비밀번호 변경</h2>${forced ? '<p class="warn">최초 로그인입니다. 초기 비밀번호를 본인만 아는 비밀번호로 변경해야 이용할 수 있습니다.</p>' : ''}
     <label>현재 비밀번호<input type="password" name="current"></label>
     <label>새 비밀번호 (8자 이상)<input type="password" name="next"></label>
     <label>새 비밀번호 확인<input type="password" name="next2"></label>
-    <div class="modal-actions">${forced ? '' : '<button class="btn" data-close>취소</button>'}<button class="btn primary" id="pw-save">변경</button></div>`);
+    <div class="modal-actions">${forced ? '<button class="btn" id="pw-logout">로그아웃</button>' : '<button class="btn" data-close>취소</button>'}<button class="btn primary" id="pw-save">변경</button></div>`);
+  $('#pw-logout', c)?.addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.reload(); });
   $('#pw-save', c).onclick = async () => {
     const v = (n) => $(`[name=${n}]`, c).value;
     if (v('next') !== v('next2')) return toast('새 비밀번호가 일치하지 않습니다', true);
-    try { await api('/api/auth/password', { method: 'POST', body: { current: v('current'), next: v('next') } }); closeModal(); toast('변경되었습니다'); } catch (e) { fail(e); }
+    if (forced && v('next') === v('current')) return toast('기존과 다른 비밀번호를 입력하세요', true);
+    try {
+      await api('/api/auth/password', { method: 'POST', body: { current: v('current'), next: v('next') } });
+      state.forcedPw = false; closeModal(); toast('변경되었습니다');
+      if (forced) { state.me.must_change_password = false; render(); }
+    } catch (e) { fail(e); }
   };
 }
 
@@ -114,6 +121,7 @@ async function boot() {
   $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden');
   $('#me-name').innerHTML = `<b>${userLabel(state.me)}</b><br><span class="note">${esc(state.me.department || '')} ${esc(state.me.position || '')}</span>`;
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
+  if (state.me.must_change_password) { $('#main').innerHTML = '<div class="card">최초 로그인입니다. 비밀번호를 변경한 뒤 이용할 수 있습니다.</div>'; changePassword(true); return; }
   api('/api/public-config').then((c) => (state.jsKey = c.kakao_js_key)).catch(() => {});
   window.onhashchange = render;
   render();
@@ -764,7 +772,7 @@ async function pageStaff() {
   $$('[data-veh]', main).forEach((b) => (b.onclick = () => vehicleForm(Number(b.dataset.u), users.find((u) => u.id == b.dataset.u).vehicles.find((v) => v.id == b.dataset.veh), models)));
   $$('[data-reset]', main).forEach((b) => (b.onclick = async () => {
     try { const r = await api(`/api/users/${b.dataset.reset}/reset-password`, { method: 'POST' });
-      openModal(`<h2>임시 비밀번호 발급</h2><p>아래 임시 비밀번호를 직원에게 전달하세요. 최초 로그인 시 변경해야 합니다. 이 창을 닫으면 다시 볼 수 없습니다.</p><input readonly value="${esc(r.temp_password)}" onclick="this.select()"><div class="modal-actions"><button class="btn primary" data-close>확인</button></div>`);
+      openModal(`<h2>비밀번호 초기화 완료</h2><p>${r.is_default ? '회사 기본 초기 비밀번호로 초기화했습니다.' : '임시 비밀번호를 발급했습니다.'} 직원은 최초 로그인 시 변경해야 합니다.</p><input readonly value="${esc(r.temp_password)}" onclick="this.select()"><div class="modal-actions"><button class="btn primary" data-close>확인</button></div>`);
     } catch (e) { fail(e); }
   }));
   $$('[data-block]', main).forEach((b) => (b.onclick = async () => {
@@ -824,7 +832,7 @@ function userForm(u, models, done = pageStaff) {
         const g = (n) => $(`[name=${n}]`, box);
         await api(`/api/vehicles/${box.dataset.vid}`, { method: 'PUT', body: { user_id: u.id, plate: g('v_plate').value, ownership: g('v_ownership').value, fuel_type: g('v_fuel').value, model: g('v_model').value, efficiency_km_l: g('v_eff').value, active: g('v_active').checked } });
       }
-      if (r.temp_password) openModal(`<h2>직원 등록 완료</h2><p>초기 비밀번호를 직원에게 전달하세요. 최초 로그인 시 변경해야 합니다. 이 창을 닫으면 다시 볼 수 없습니다.</p><input readonly value="${esc(r.temp_password)}" onclick="this.select()"><div class="modal-actions"><button class="btn primary" data-close>확인</button></div>`);
+      if (r.temp_password) openModal(`<h2>직원 등록 완료</h2><p>로그인: 회사 이메일 / 초기 비밀번호: ${r.is_default ? '회사 기본 초기 비밀번호' : '아래 임시 비밀번호'}. 최초 로그인 시 변경 화면이 뜹니다.</p><input readonly value="${esc(r.temp_password)}" onclick="this.select()"><div class="modal-actions"><button class="btn primary" data-close>확인</button></div>`);
       else closeModal();
       done();
     } catch (e) { fail(e); }

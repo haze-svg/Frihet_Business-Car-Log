@@ -35,7 +35,7 @@ async function bootstrap() {
     else console.log(`[seed] 관리자 ${adminEmail} 생성 (ADMIN_PASSWORD 사용)`);
   }
 
-  if (done.rows[0]) return;
+  if (done.rows[0]) return applyInitialPassword();
   const initial = process.env.INITIAL_PASSWORD;
   for (const s of STAFF) {
     const pw = initial || crypto.randomBytes(12).toString('hex');
@@ -46,7 +46,22 @@ async function bootstrap() {
     );
   }
   await q("INSERT INTO settings(key,value) VALUES('seeded','1') ON CONFLICT DO NOTHING");
+  await applyInitialPassword();
   console.log(`[seed] 기본 직원 ${STAFF.length}명 등록${initial ? ' (INITIAL_PASSWORD 적용)' : ' (관리자 화면에서 비밀번호 초기화 필요)'}`);
+}
+
+// INITIAL_PASSWORD가 새 값으로 바뀐 경우에만: 최초 비밀번호를 아직 바꾸지 않은 일반 직원 계정에 적용
+// (이미 본인 비밀번호로 바꾼 직원과 관리자 계정은 건드리지 않음)
+async function applyInitialPassword() {
+  const pw = process.env.INITIAL_PASSWORD;
+  if (!pw) return;
+  const mark = crypto.createHash('sha256').update('fbcl:' + pw).digest('hex');
+  const cur = await q("SELECT value FROM settings WHERE key='initial_pw_mark'");
+  if (cur.rows[0]?.value === mark) return;
+  const hash = await bcrypt.hash(pw, 10);
+  const r = await q("UPDATE users SET password_hash=$1, token_version=token_version+1 WHERE role<>'admin' AND must_change_password=true RETURNING email", [hash]);
+  await q("INSERT INTO settings(key,value) VALUES('initial_pw_mark',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [mark]);
+  console.log(`[seed] 변경된 INITIAL_PASSWORD를 최초 비밀번호 미변경 직원 ${r.rowCount}명에게 적용`);
 }
 
 module.exports = { bootstrap, STAFF };

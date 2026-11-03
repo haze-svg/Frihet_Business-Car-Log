@@ -75,6 +75,10 @@ const auth = wrap(async (req, res, next) => {
     throw bad('접속이 차단되었거나 세션이 무효화되었습니다', 401);
   }
   req.user = u;
+  const allow = ['/api/me', '/api/auth/password', '/api/auth/logout'];
+  if (u.must_change_password && !allow.includes(req.path)) {
+    throw Object.assign(new Error('최초 로그인입니다. 비밀번호를 먼저 변경하세요'), { status: 403, mustChange: true });
+  }
   next();
 });
 const admin = (req, res, next) => (req.user.role === 'admin' ? next() : next(bad('관리자 권한이 필요합니다', 403)));
@@ -139,6 +143,8 @@ app.get('/api/users', auth, wrap(async (req, res) => {
   res.json(r.rows);
 }));
 
+// 회사 기본 초기 비밀번호는 FND 환경변수 INITIAL_PASSWORD (저장소는 공개이므로 코드에 두지 않음)
+const defaultPassword = () => process.env.INITIAL_PASSWORD || null;
 function tempPassword() {
   return 'Fh' + crypto.randomBytes(5).toString('base64url') + '!7';
 }
@@ -148,7 +154,7 @@ app.post('/api/users', auth, admin, wrap(async (req, res) => {
   const email = String(b.email || '').trim().toLowerCase();
   if (!email.endsWith(DOMAIN)) throw bad('이메일은 @cafefrihet.com 계정이어야 합니다');
   if (!str(b.name)) throw bad('이름은 필수입니다');
-  const pw = str(b.password) || tempPassword();
+  const pw = str(b.password) || defaultPassword() || tempPassword();
   const hash = await bcrypt.hash(pw, 10);
   const client = await pool.connect();
   try {
@@ -162,7 +168,7 @@ app.post('/api/users', auth, admin, wrap(async (req, res) => {
       await insertVehicle(client, u.rows[0].id, b.vehicle);
     }
     await client.query('COMMIT');
-    res.json({ id: u.rows[0].id, temp_password: pw });
+    res.json({ id: u.rows[0].id, temp_password: pw, is_default: !str(b.password) && !!defaultPassword() });
   } catch (e) {
     await client.query('ROLLBACK');
     if (e.code === '23505') throw bad('이미 등록된 이메일입니다');
@@ -192,10 +198,10 @@ app.post('/api/users/:id/activate', auth, admin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 app.post('/api/users/:id/reset-password', auth, admin, wrap(async (req, res) => {
-  const pw = tempPassword();
+  const pw = defaultPassword() || tempPassword();
   await q('UPDATE users SET password_hash=$1, must_change_password=true, token_version=token_version+1 WHERE id=$2',
     [await bcrypt.hash(pw, 10), int(req.params.id)]);
-  res.json({ temp_password: pw });
+  res.json({ temp_password: pw, is_default: !!defaultPassword() });
 }));
 
 // ---------- 차량 ----------
@@ -716,7 +722,7 @@ app.get(/^\/(?!api\/).*/, sendIndex);
 app.use((err, req, res, next) => {
   const status = err.status || (err.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
   if (status >= 500) console.error(err);
-  res.status(status).json({ error: status >= 500 && !err.status ? '서버 오류가 발생했습니다' : err.message });
+  res.status(status).json({ error: status >= 500 && !err.status ? '서버 오류가 발생했습니다' : err.message, must_change: !!err.mustChange });
 });
 
 (async () => {
