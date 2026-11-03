@@ -8,20 +8,39 @@ async function getSetting(key) {
   return r.rows[0]?.value || null;
 }
 
+async function kakaoGet(path, key) {
+  const res = await fetch('https://dapi.kakao.com' + path, { headers: { Authorization: 'KakaoAK ' + key } });
+  if (!res.ok) throw Object.assign(new Error('카카오 장소검색 실패: HTTP ' + res.status), { status: 502 });
+  return res.json();
+}
+
+// 장소명(키워드) 검색 + 도로명/지번 주소 검색을 함께 수행 (주소만 입력해도 결과가 나오도록)
 async function searchPlaces(query) {
   const key = await getSetting('kakao_rest_key');
   if (!key) throw Object.assign(new Error('카카오 REST API 키 미설정 (설정 메뉴에서 등록 필요)'), { status: 503 });
-  const url = 'https://dapi.kakao.com/v2/local/search/keyword.json?size=10&query=' + encodeURIComponent(query);
-  const res = await fetch(url, { headers: { Authorization: 'KakaoAK ' + key } });
-  if (!res.ok) throw Object.assign(new Error('카카오 장소검색 실패: HTTP ' + res.status), { status: 502 });
-  const data = await res.json();
-  return (data.documents || []).map((d) => ({
-    name: d.place_name,
-    address: d.road_address_name || d.address_name,
-    x: Number(d.x),
-    y: Number(d.y),
-    category: d.category_group_name || '',
-  }));
+  const qs = encodeURIComponent(query);
+  const [kw, addr] = await Promise.all([
+    kakaoGet('/v2/local/search/keyword.json?size=10&query=' + qs, key).catch(() => ({ documents: [] })),
+    kakaoGet('/v2/local/search/address.json?size=5&query=' + qs, key).catch(() => ({ documents: [] })),
+  ]);
+  const out = [];
+  for (const d of addr.documents || []) {
+    const road = d.road_address;
+    out.push({
+      name: road?.building_name ? `${road.building_name} (${road.address_name})` : (road?.address_name || d.address_name),
+      address: road?.address_name || d.address_name,
+      x: Number(d.x), y: Number(d.y), category: '주소',
+    });
+  }
+  for (const d of kw.documents || []) {
+    out.push({
+      name: d.place_name,
+      address: d.road_address_name || d.address_name,
+      x: Number(d.x), y: Number(d.y),
+      category: d.category_group_name || '',
+    });
+  }
+  return out.slice(0, 12);
 }
 
 async function route(sx, sy, ex, ey) {

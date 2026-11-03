@@ -7,7 +7,7 @@ const km = (v) => (Math.round((Number(v) || 0) * 10) / 10).toLocaleString('ko-KR
 const FUEL = { gasoline: '휘발유', diesel: '경유', lpg: 'LPG', hybrid: '하이브리드(휘발유)', ev: '전기' };
 const OWN = { corporate: '법인차량', personal: '개인차량' };
 const CARD = { corporate: '법인카드', personal: '개인카드', receipt: '증빙(이관)' };
-const EXP_CATS = ['주유', '충전', '통행료', '주차', '세차', '정비', '식대', '기타'];
+const EXP_CATS = ['식대', '주유비', '통행료', '주차비', '매장물품구매', '숙박비', '기타'];
 const MAINT_TYPES = ['정기점검', '엔진오일', '타이어', '소모품', '수리', '세차', '보험', '검사', '사고', '기타'];
 
 const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
@@ -35,7 +35,7 @@ function toast(msg, err = false) {
 }
 const fail = (e) => toast(e.message || String(e), true);
 function openModal(html, wide = false) {
-  const c = $('#modal-card'); c.className = 'modal-card' + (wide ? ' wide' : ''); c.innerHTML = html;
+  const c = $('#modal-card'); c.className = 'modal-card' + (wide === 'full' ? ' full' : wide ? ' wide' : ''); c.innerHTML = html;
   $('#modal').classList.remove('hidden');
   $$('[data-close]', c).forEach((b) => (b.onclick = closeModal));
   return c;
@@ -58,7 +58,12 @@ function rangeControls(onChange) {
   setTimeout(() => {
     const box = document.getElementById(id); if (!box) return;
     const apply = () => { state.range = { from: $('[name=from]', box).value, to: $('[name=to]', box).value }; onChange(); };
-    $$('input', box).forEach((i) => (i.onchange = apply));
+    $$('input[type=date]', box).forEach((i) => (i.onchange = apply));
+    $('[name=month]', box).onchange = (e) => {
+      const [y, m] = e.target.value.split('-').map(Number); if (!y) return;
+      const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      state.range = { from: `${y}-${String(m).padStart(2, '0')}-01`, to: `${y}-${String(m).padStart(2, '0')}-${last}` }; onChange();
+    };
     $$('[data-preset]', box).forEach((b) => (b.onclick = () => {
       const p = b.dataset.preset;
       if (p === 'this') state.range = monthRange(0);
@@ -69,7 +74,9 @@ function rangeControls(onChange) {
     }));
   });
   const r = state.range;
+  const isMonth = r.from.slice(0, 7) === r.to.slice(0, 7) && r.from.endsWith('-01');
   return `<div class="inline" id="${id}">
+    <label class="inline" style="font-size:12px">월 선택 <input type="month" name="month" value="${isMonth ? r.from.slice(0, 7) : ''}"></label>
     <input type="date" name="from" value="${r.from}"> ~ <input type="date" name="to" value="${r.to}">
     <button class="btn sm" data-preset="this">이번 달</button><button class="btn sm" data-preset="last">지난 달</button>
     <button class="btn sm" data-preset="year">올해</button><button class="btn sm" data-preset="all">전체</button></div>`;
@@ -151,16 +158,17 @@ async function pageTrips() {
       <div class="kpi"><div class="l">연료비(공식연비 기준)</div><div class="v">${won(t.fuel)}원</div></div>
       <div class="kpi"><div class="l">통행료</div><div class="v">${won(t.toll)}원</div></div>
       <div class="kpi"><div class="l">운행비 합계</div><div class="v">${won(t.fuel + t.toll + t.park)}원</div></div>
-      <div class="kpi"><div class="l">법인카드 / 개인카드</div><div class="v">${won(e.corporate)} / ${won(e.personal)}</div></div>
+      <div class="kpi pick" id="kpi-card" title="카드 사용 상세 보기"><div class="l">법인카드 / 개인카드 ›</div><div class="v">${won(e.corporate)} / ${won(e.personal)}</div></div>
     </div>
     <div class="tabs"><a data-tab="trips">운행 기록 (${trips.length})</a><a data-tab="expenses">카드 사용 (${exps.length})</a></div>
     <div id="tab-body"></div>`;
   $('#back')?.addEventListener('click', () => { state.tripUser = null; pageTrips(); });
+  $('#kpi-card').onclick = () => { state.tab = 'expenses'; renderTab(); $('.tabs').scrollIntoView({ behavior: 'smooth' }); };
   const renderTab = () => {
     $$('.tabs a', main).forEach((a) => a.classList.toggle('active', a.dataset.tab === state.tab));
     const body = $('#tab-body');
     if (state.tab === 'trips') {
-      body.innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-trip">+ 운행 기록</button>
+      body.innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-trip">+ 운행 기록 (하루 일괄 입력)</button>
         ${myVehicles.length ? '' : '<span class="warn">등록된 차량이 없습니다. 연료비 자동계산을 위해 차량을 먼저 등록하세요.</span>'}</div>
         <div class="table-wrap"><table><thead><tr><th>일자</th><th>차량</th><th>목적</th><th>출발</th><th>도착</th><th>왕복</th>
         <th class="n">거리(km)</th><th class="n">통행료</th><th class="n">유가(원/L)</th><th class="n">연비</th><th class="n">연료비</th><th class="n">주차비</th><th class="n">운행비</th><th></th></tr></thead>
@@ -171,19 +179,31 @@ async function pageTrips() {
           <td class="n"><b>${won(r.fuel_cost_won + r.toll_won + r.parking_won)}</b></td>
           <td><button class="btn sm" data-edit="${r.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="14" class="empty">기록 없음</td></tr>'}</tbody>
         <tfoot><tr><td colspan="6">합계</td><td class="n">${km(t.km)}</td><td class="n">${won(t.toll)}</td><td></td><td></td><td class="n">${won(t.fuel)}</td><td class="n">${won(t.park)}</td><td class="n">${won(t.fuel + t.toll + t.park)}</td><td></td></tr></tfoot></table></div>`;
-      $('#add-trip').onclick = () => tripForm(u, myVehicles, null);
+      $('#add-trip').onclick = () => dayForm(u, myVehicles);
       $$('[data-edit]', body).forEach((b) => (b.onclick = () => tripForm(u, myVehicles, trips.find((x) => x.id == b.dataset.edit))));
     } else {
-      body.innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-exp">+ 카드 사용 등록</button></div>
-        <div class="table-wrap"><table><thead><tr><th>일자</th><th>구분</th><th>항목</th><th>목적</th><th class="n">금액</th><th>증빙 사진</th><th>비고</th><th></th></tr></thead>
-        <tbody>${exps.map((r) => `<tr><td>${r.expense_date.slice(0, 10)}</td>
-          <td><span class="badge ${r.card_type === 'corporate' ? 'corp' : r.card_type === 'personal' ? 'pers' : 'off'}">${CARD[r.card_type]}</span></td>
-          <td>${esc(r.category)}</td><td class="wrap">${esc(r.purpose)}</td><td class="n">${won(r.amount)}</td><td>${thumbs(r.photos)}</td>
-          <td class="wrap">${esc(r.memo)}</td><td><button class="btn sm" data-edit="${r.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">기록 없음</td></tr>'}</tbody>
-        <tfoot>
-          <tr><td colspan="4">법인카드 합계</td><td class="n">${won(e.corporate)}</td><td colspan="3"></td></tr>
-          <tr><td colspan="4">개인카드 합계</td><td class="n">${won(e.personal)}</td><td colspan="3"></td></tr>
-          <tr><td colspan="4">총 합계</td><td class="n">${won(e.corporate + e.personal)}</td><td colspan="3"></td></tr></tfoot></table></div>`;
+      const real = exps.filter((r) => r.card_type !== 'receipt');
+      const bundles = exps.filter((r) => r.card_type === 'receipt');
+      const days = {};
+      real.forEach((r) => ((days[r.expense_date.slice(0, 10)] ||= { corporate: [], personal: [] })[r.card_type].push(r)));
+      const nPhotos = exps.reduce((a, r) => a + r.photos.length, 0);
+      const item = (r) => `<div class="exp-item"><div class="row" style="justify-content:space-between"><span><span class="badge ${r.card_type === 'corporate' ? 'corp' : 'pers'}">${esc(r.category)}</span> ${esc(r.purpose || '')}</span><b>${won(r.amount)}원</b></div>
+        ${r.photos.length ? `<div class="thumbs big">${thumbs(r.photos).replace('<div class="thumbs">', '').replace(/<\/div>$/, '')}</div>` : '<div class="note">영수증 없음</div>'}
+        ${r.memo ? `<div class="note">${esc(r.memo)}</div>` : ''}<div style="text-align:right"><button class="btn sm" data-edit="${r.id}">수정</button></div></div>`;
+      body.innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-exp">+ 카드 사용 단건 등록</button>
+          <button class="btn" id="add-day2">+ 하루 일괄 입력</button></div>
+        <div class="kpis">
+          <div class="kpi"><div class="l">법인카드 합계</div><div class="v" style="color:var(--corp)">${won(e.corporate)}원</div><div class="note">${real.filter((r) => r.card_type === 'corporate').length}건</div></div>
+          <div class="kpi"><div class="l">개인카드 합계</div><div class="v" style="color:var(--pers)">${won(e.personal)}원</div><div class="note">${real.filter((r) => r.card_type === 'personal').length}건</div></div>
+          <div class="kpi"><div class="l">총 합계</div><div class="v">${won(e.corporate + e.personal)}원</div></div>
+          <div class="kpi"><div class="l">영수증 사진</div><div class="v">${nPhotos}장</div></div></div>
+        ${Object.keys(days).sort().reverse().map((d) => { const D = days[d]; const sc = D.corporate.reduce((a, r) => a + r.amount, 0), sp = D.personal.reduce((a, r) => a + r.amount, 0);
+          return `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
+            <span class="note">법인 <b style="color:var(--corp)">${won(sc)}</b> · 개인 <b style="color:var(--pers)">${won(sp)}</b> · 합계 <b>${won(sc + sp)}원</b></span></div>
+            <div class="grid2"><div><div class="col-title corp">법인카드</div>${D.corporate.map(item).join('') || '<div class="note">-</div>'}</div>
+            <div><div class="col-title pers">개인카드</div>${D.personal.map(item).join('') || '<div class="note">-</div>'}</div></div></div>`; }).join('') || '<div class="empty card">기간 내 카드 사용 내역 없음</div>'}
+        ${bundles.length ? `<h2 style="margin-top:18px">엑셀 이관 영수증 (월별 일괄 · 건별 구분 불가)</h2>${bundles.map((r) => `<div class="card day-block"><div class="row" style="justify-content:space-between"><b>${esc(r.purpose)}</b><span class="note">${esc(r.memo || '')}</span></div><div class="thumbs big">${thumbs(r.photos).replace('<div class="thumbs">', '').replace(/<\/div>$/, '')}</div></div>`).join('')}` : ''}`;
+      $('#add-day2').onclick = () => dayForm(u, myVehicles);
       $('#add-exp').onclick = () => expenseForm(u, myVehicles, null);
       $$('[data-edit]', body).forEach((b) => (b.onclick = () => expenseForm(u, myVehicles, exps.find((x) => x.id == b.dataset.edit))));
     }
@@ -198,24 +218,50 @@ function placeInput(name, label, init) {
 }
 function bindPlace(box, onPick, initVal) {
   const input = $('.pq', box), results = $('.results', box), chosen = $('.chosen', box);
-  box._val = initVal || null; let timer;
-  input.oninput = () => {
-    box._val = null; chosen.textContent = ''; onPick(null);
-    clearTimeout(timer);
-    const qv = input.value.trim(); if (qv.length < 2) return results.classList.add('hidden');
-    timer = setTimeout(async () => {
-      try {
-        const list = await api('/api/places?q=' + encodeURIComponent(qv));
-        results.innerHTML = list.map((p, i) => `<div data-i="${i}"><b>${esc(p.name)}</b><small>${esc(p.address)} ${p.category ? '· ' + esc(p.category) : ''}</small></div>`).join('') || '<div>검색 결과 없음</div>';
-        results.classList.remove('hidden');
-        $$('[data-i]', results).forEach((d) => (d.onclick = () => {
-          const p = list[d.dataset.i]; box._val = p; input.value = p.name; chosen.textContent = '✓ ' + p.address;
-          results.classList.add('hidden'); onPick(p);
-        }));
-      } catch (e) { results.innerHTML = `<div class="warn">${esc(e.message)}</div>`; results.classList.remove('hidden'); }
-    }, 300);
+  box._val = initVal || null; let timer; let list = []; let pending = null;
+  const pick = (p) => {
+    box._val = p; input.value = p.name; chosen.textContent = '✓ ' + p.address; chosen.classList.remove('warn');
+    results.classList.add('hidden'); onPick(p);
   };
-  input.onblur = () => setTimeout(() => results.classList.add('hidden'), 200);
+  const search = async (qv) => {
+    list = await api('/api/places?q=' + encodeURIComponent(qv));
+    results.innerHTML = list.map((p, i) => `<div data-i="${i}"><b>${esc(p.name)}</b><small>${esc(p.address)} ${p.category ? '· ' + esc(p.category) : ''}</small></div>`).join('') || '<div>검색 결과 없음 — 다른 이름이나 도로명 주소로 입력하세요</div>';
+    $$('[data-i]', results).forEach((d) => (d.onmousedown = (ev) => { ev.preventDefault(); pick(list[d.dataset.i]); }));
+    return list;
+  };
+  input.oninput = () => {
+    box._val = null; list = []; chosen.textContent = ''; onPick(null);
+    clearTimeout(timer);
+    const qv = input.value.trim(); if (qv.length < 1) return results.classList.add('hidden');
+    timer = setTimeout(() => {
+      pending = search(qv).then(() => { if (document.activeElement === input) results.classList.remove('hidden'); })
+        .catch((e) => { results.innerHTML = `<div class="warn">${esc(e.message)}</div>`; results.classList.remove('hidden'); });
+    }, 250);
+  };
+  // 목록을 누르지 않고 Enter·다음 칸 이동 시 첫 번째 결과를 자동 선택
+  const autoPick = async () => {
+    if (box._val) return;
+    const qv = input.value.trim(); if (qv.length < 1) return;
+    clearTimeout(timer);
+    try { if (!list.length) await search(qv); } catch (e) { chosen.textContent = e.message; chosen.classList.add('warn'); return; }
+    if (list.length) pick(list[0]);
+    else { chosen.textContent = '장소를 찾지 못했습니다 — 거리를 직접 입력하세요'; chosen.classList.add('warn'); }
+  };
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); autoPick(); } };
+  input.onblur = () => { results.classList.add('hidden'); autoPick(); };
+}
+
+// 업로드 전 사진 축소 (긴 변 1600px JPEG) — 업로드 실패·용량 문제 방지
+async function shrink(file) {
+  if (!file.type.startsWith('image/') || file.size < 400 * 1024) return file;
+  try {
+    const img = await createImageBitmap(file);
+    const sc = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const cv = document.createElement('canvas'); cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.8));
+    return blob ? new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
+  } catch { return file; }
 }
 
 let kakaoLoading;
@@ -332,6 +378,139 @@ function confirmInline(c, msg) {
   return false;
 }
 
+// ========== 하루 일괄 입력: 여러 구간 운행 + 법인/개인 카드 사용 + 당일 합계 ==========
+async function dayForm(u, vehicles) {
+  const c = openModal(`<div class="row" style="justify-content:space-between"><h2 style="margin:0">운행 기록 · ${userLabel(u)}</h2><button class="btn" data-close>닫기</button></div>
+    <div class="grid3"><label>운행일자<input type="date" name="date" value="${today()}"></label>
+      <label>차량<select name="vehicle_id">${vehicles.map((v) => `<option value="${v.id}">${esc(v.plate)} · ${OWN[v.ownership]} · ${FUEL[v.fuel_type]}</option>`).join('') || '<option value="">차량 없음</option>'}</select></label>
+      <label>운행 목적 (전체 구간 공통)<input name="purpose" placeholder="예: 매장 점검·라운딩"></label></div>
+    <div class="grid2"><label>유가 (원/L)<input name="price" inputmode="decimal"></label><label>공식연비 (km/L)<input name="eff" inputmode="decimal"></label></div>
+    <div class="note" id="price-src"></div>
+    <h3 class="sec">이동 구간</h3>
+    <div id="legs"></div>
+    <div><button class="btn" id="add-leg">+ 구간 추가 (이어서 이동한 장소)</button></div>
+    <h3 class="sec">카드 사용 내역</h3>
+    <div class="grid2 cards2">
+      <div class="card-col corp"><div class="col-title corp">법인카드</div><div class="exp-rows" data-card="corporate"></div><button class="btn sm" data-addexp="corporate">+ 법인카드 사용 추가</button></div>
+      <div class="card-col pers"><div class="col-title pers">개인카드</div><div class="exp-rows" data-card="personal"></div><button class="btn sm" data-addexp="personal">+ 개인카드 사용 추가</button></div>
+    </div>
+    <h3 class="sec">당일 합계</h3>
+    <div class="day-sum" id="day-sum"></div>
+    <div class="modal-actions"><button class="btn" data-close>취소</button><button class="btn primary" id="save">저장</button></div>`, 'full');
+  const f = (n) => $(`[name=${n}]`, c);
+  let seq = 0;
+
+  const setVehicle = async () => {
+    const v = vehicles.find((x) => x.id == f('vehicle_id').value);
+    f('eff').value = v?.efficiency_km_l ?? '';
+    if (!v) return recalc();
+    try {
+      const fp = await api('/api/fuel-price?type=' + v.fuel_type);
+      f('price').value = fp.price ?? '';
+      $('#price-src', c).textContent = (fp.price ? `유가 ${won(fp.price)}원 · ${fp.source === 'opinet' ? '오피넷 전국평균' : '관리자 수동입력'} (${fp.date})` : '유가 데이터 확인 불가 — 직접 입력하세요')
+        + (v.efficiency_km_l ? '' : ' · 이 차량의 공식연비 미등록 (연료비 계산 불가)');
+    } catch (e) { fail(e); }
+    recalc();
+  };
+
+  const legBox = $('#legs', c);
+  const addLeg = (prevEnd) => {
+    const n = legBox.children.length + 1;
+    const el = document.createElement('div'); el.className = 'leg card';
+    el.innerHTML = `<div class="row" style="justify-content:space-between"><b class="leg-no">구간 ${n}</b><button class="btn sm danger" data-rm>삭제</button></div>
+      <div class="grid2">${placeInput('s' + (++seq), '출발지', prevEnd && { name: prevEnd.name, addr: prevEnd.address })}${placeInput('e' + seq, '도착지', null)}</div>
+      <div class="leg-nums"><label class="inline" style="font-size:13px;color:var(--ink)"><input type="checkbox" name="round" style="width:auto"> 왕복</label>
+        <label>거리(km)<input name="km" inputmode="decimal"></label><label>통행료(원)<input name="toll" inputmode="numeric" value="0"></label>
+        <label>주차비(원)<input name="park" inputmode="numeric" value="0"></label><div class="leg-fuel"><span class="note">연료비</span><b>-</b></div></div>
+      <div class="note leg-status"></div>`;
+    legBox.appendChild(el);
+    const [bs, be] = $$('.place', el);
+    el._bs = bs; el._be = be; el._base = null;
+    const g = (k) => $(`[name=${k}]`, el);
+    const apply = () => { if (!el._base) return recalc(); const m = g('round').checked ? 2 : 1; g('km').value = Math.round(el._base.km * m * 10) / 10; g('toll').value = el._base.toll * m; recalc(); };
+    const onPick = async () => {
+      const a = bs._val, b = be._val; if (!a || !b) return;
+      $('.leg-status', el).textContent = '경로 계산 중…';
+      try {
+        const rt = await api(`/api/route?sx=${a.x}&sy=${a.y}&ex=${b.x}&ey=${b.y}`);
+        el._base = { km: rt.distance_km, toll: rt.toll_won }; apply();
+        $('.leg-status', el).textContent = `카카오 추천경로 편도 ${km(rt.distance_km)}km · 약 ${rt.duration_min}분 · 통행료 ${won(rt.toll_won)}원`;
+      } catch (e) { $('.leg-status', el).textContent = e.message + ' — 거리 직접 입력'; }
+    };
+    bindPlace(bs, onPick, prevEnd || null); bindPlace(be, onPick, null);
+    g('round').onchange = apply;
+    ['km', 'toll', 'park'].forEach((k) => (g(k).oninput = recalc));
+    $('[data-rm]', el).onclick = () => { if (legBox.children.length > 1) { el.remove(); $$('.leg-no', legBox).forEach((x, i) => (x.textContent = '구간 ' + (i + 1))); recalc(); } };
+    (prevEnd ? $('.pq', be) : $('.pq', bs)).focus();
+    recalc();
+  };
+
+  const addExp = (card) => {
+    const k = 'x' + (++seq);
+    const el = document.createElement('div'); el.className = 'exp-row'; el.dataset.key = k;
+    el.innerHTML = `<div class="exp-grid"><select name="cat">${EXP_CATS.map((x) => `<option>${x}</option>`).join('')}</select>
+      <input name="etc" class="hidden" placeholder="기타 항목 입력"><input name="amount" inputmode="numeric" placeholder="금액(원)">
+      <input name="purpose" placeholder="내용 (예: 운영팀 중식)"><button class="btn sm danger" data-rm>×</button></div>
+      <label class="note">영수증 사진<input type="file" name="photos" accept="image/*,application/pdf" multiple></label><div class="photo-edit"></div>`;
+    $(`.exp-rows[data-card=${card}]`, c).appendChild(el);
+    $('[name=cat]', el).onchange = (e) => $('[name=etc]', el).classList.toggle('hidden', e.target.value !== '기타');
+    $('[name=amount]', el).oninput = recalc;
+    $('[name=photos]', el).onchange = (e) => {
+      $('.photo-edit', el).innerHTML = [...e.target.files].map((x) => x.type.startsWith('image/') ? `<div class="ph"><img src="${URL.createObjectURL(x)}"></div>` : `<div class="note">${esc(x.name)}</div>`).join('');
+    };
+    $('[data-rm]', el).onclick = () => { el.remove(); recalc(); };
+    $('[name=amount]', el).focus();
+  };
+
+  function recalc() {
+    const eff = Number(f('eff').value) || 0, price = Number(f('price').value) || 0;
+    let tk = 0, tt = 0, tp = 0, tf = 0;
+    $$('.leg', legBox).forEach((el) => {
+      const d = Number($('[name=km]', el).value) || 0, fuel = d && eff && price ? Math.round((d / eff) * price) : 0;
+      $('.leg-fuel b', el).textContent = eff && price ? won(fuel) + '원' : '데이터 확인 불가';
+      tk += d; tt += Number($('[name=toll]', el).value) || 0; tp += Number($('[name=park]', el).value) || 0; tf += fuel;
+    });
+    const sum = (card) => $$(`.exp-rows[data-card=${card}] [name=amount]`, c).reduce((a, x) => a + (Number(String(x.value).replace(/[^\d]/g, '')) || 0), 0);
+    const sc = sum('corporate'), sp = sum('personal');
+    $('#day-sum', c).innerHTML = `<div><span>총 거리</span><b>${km(tk)} km</b></div><div><span>연료비</span><b>${won(tf)}원</b></div>
+      <div><span>통행료</span><b>${won(tt)}원</b></div><div><span>주차비</span><b>${won(tp)}원</b></div><div class="hl"><span>운행비 합계</span><b>${won(tf + tt + tp)}원</b></div>
+      <div><span>법인카드</span><b style="color:var(--corp)">${won(sc)}원</b></div><div><span>개인카드</span><b style="color:var(--pers)">${won(sp)}원</b></div><div class="hl"><span>카드 합계</span><b>${won(sc + sp)}원</b></div>`;
+  }
+
+  $('#add-leg', c).onclick = () => { const legs = $$('.leg', legBox); const last = legs[legs.length - 1]; addLeg(last?._be._val || null); };
+  $$('[data-addexp]', c).forEach((b) => (b.onclick = () => addExp(b.dataset.addexp)));
+  f('vehicle_id').onchange = setVehicle;
+  ['price', 'eff'].forEach((n) => (f(n).oninput = recalc));
+  addLeg(null);
+  await setVehicle();
+
+  $('#save', c).onclick = async (ev) => {
+    const btn = ev.target;
+    const legs = $$('.leg', legBox).map((el) => {
+      const s1 = el._bs._val, e1 = el._be._val, g = (k) => $(`[name=${k}]`, el);
+      return { purpose: f('purpose').value, start_name: $('.pq', el._bs).value, start_addr: s1?.address, start_x: s1?.x, start_y: s1?.y,
+        end_name: $('.pq', el._be).value, end_addr: e1?.address, end_x: e1?.x, end_y: e1?.y,
+        round_trip: g('round').checked, distance_km: g('km').value, toll_won: g('toll').value, parking_won: g('park').value };
+    });
+    const noKm = legs.filter((l) => (l.start_name || l.end_name) && !Number(l.distance_km));
+    if (noKm.length) return toast(`거리가 비어 있는 구간이 ${noKm.length}개 있습니다. 장소를 목록에서 선택하거나 거리를 입력하세요`, true);
+    const expenses = $$('.exp-row', c).map((el) => {
+      const cat = $('[name=cat]', el).value;
+      return { key: el.dataset.key, card_type: el.closest('.exp-rows').dataset.card, category: cat === '기타' ? ($('[name=etc]', el).value.trim() || '기타') : cat,
+        purpose: $('[name=purpose]', el).value, amount: $('[name=amount]', el).value };
+    });
+    const fd = new FormData();
+    fd.append('payload', JSON.stringify({ user_id: u.id, date: f('date').value, vehicle_id: f('vehicle_id').value || null,
+      fuel_price_won: f('price').value, efficiency_km_l: f('eff').value, legs, expenses }));
+    btn.disabled = true; btn.textContent = '저장 중…';
+    try {
+      for (const el of $$('.exp-row', c)) for (const file of $('[name=photos]', el).files) fd.append('photo_' + el.dataset.key, await shrink(file));
+      const r = await api('/api/day', { method: 'POST', body: fd });
+      closeModal(); toast(`저장 완료 · 운행 ${r.trips}건 · 카드 ${r.expenses}건 · 사진 ${r.photos}장`); pageTrips();
+    } catch (e) { fail(e); btn.disabled = false; btn.textContent = '저장'; }
+  };
+}
+
 function photoPicker(existing) {
   return `<label>증빙 사진 (여러 장 가능, 이 건에만 연결됩니다)<input type="file" name="photos" accept="image/*,application/pdf" multiple></label>
     <div class="photo-edit" id="photo-edit">${(existing || []).map((p) => `<div class="ph" data-pid="${p.id}">${p.mime === 'application/pdf' ? '<div class="note">PDF</div>' : `<img src="/api/photos/${p.id}" data-full="/api/photos/${p.id}">`}<span class="x" title="삭제">×</span></div>`).join('')}</div>
@@ -352,7 +531,7 @@ function expenseForm(u, vehicles, rec) {
   const c = openModal(`<h2>${rec ? '카드 사용 수정' : '카드 사용 등록'} · ${userLabel(u)}</h2>
     <div class="row">${['corporate', 'personal'].map((t) => `<label class="inline" style="font-size:14px;color:var(--ink)"><input type="radio" name="card_type" value="${t}" style="width:auto" ${r.card_type === t ? 'checked' : ''}> ${CARD[t]}</label>`).join('')}</div>
     <div class="grid3"><label>사용일자<input type="date" name="expense_date" value="${String(r.expense_date).slice(0, 10)}"></label>
-      <label>항목<select name="category">${EXP_CATS.map((x) => `<option ${x === r.category ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+      <label>항목<select name="category">${(EXP_CATS.includes(r.category) ? EXP_CATS : [...EXP_CATS, r.category]).map((x) => `<option ${x === r.category ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
       <label>금액 (원)<input name="amount" inputmode="numeric" value="${r.amount}"></label></div>
     <div class="grid2"><label>사용 목적<input name="purpose" value="${esc(r.purpose || '')}"></label>
       <label>차량<select name="vehicle_id"><option value="">-</option>${vehicles.map((v) => `<option value="${v.id}" ${v.id == r.vehicle_id ? 'selected' : ''}>${esc(v.plate)}</option>`).join('')}</select></label></div>
@@ -365,7 +544,7 @@ function expenseForm(u, vehicles, rec) {
     fd.append('user_id', u.id);
     fd.append('card_type', $('[name=card_type]:checked', c)?.value || '');
     ['expense_date', 'category', 'amount', 'purpose', 'vehicle_id', 'memo'].forEach((n) => fd.append(n, $(`[name=${n}]`, c).value));
-    [...$('[name=photos]', c).files].forEach((f) => fd.append('photos', f));
+    for (const f of $('[name=photos]', c).files) fd.append('photos', await shrink(f));
     try { await api(rec ? `/api/expenses/${rec.id}` : '/api/expenses', { method: rec ? 'PUT' : 'POST', body: fd }); closeModal(); toast('저장되었습니다'); state.tab = 'expenses'; pageTrips(); } catch (e) { fail(e); }
   };
   $('#del', c)?.addEventListener('click', async () => {
@@ -426,7 +605,7 @@ function maintForm(v, rec) {
   $('#save', c).onclick = async () => {
     const fd = new FormData(); fd.append('vehicle_id', v.id);
     ['maint_date', 'maint_type', 'odometer_km', 'description', 'vendor', 'amount', 'card_type', 'next_due_date', 'next_due_km', 'memo'].forEach((n) => fd.append(n, $(`[name=${n}]`, c).value));
-    [...$('[name=photos]', c).files].forEach((f) => fd.append('photos', f));
+    for (const f of $('[name=photos]', c).files) fd.append('photos', await shrink(f));
     try { await api(rec ? `/api/maintenance/${rec.id}` : '/api/maintenance', { method: rec ? 'PUT' : 'POST', body: fd }); closeModal(); toast('저장되었습니다'); pageMaint(); } catch (e) { fail(e); }
   };
   $('#del', c)?.addEventListener('click', async () => {

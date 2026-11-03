@@ -136,6 +136,9 @@ CREATE TABLE IF NOT EXISTS fuel_prices (
 
 async function migrate() {
   await pool.query(SCHEMA);
+  // 카드 사용 항목명 통일 (선택형 항목: 식대·주유비·통행료·주차비·매장물품구매·숙박비·기타)
+  await pool.query("UPDATE expenses SET category='주유비' WHERE category='주유'");
+  await pool.query("UPDATE expenses SET category='주차비' WHERE category='주차'");
 }
 
 module.exports = { pool, q, migrate };

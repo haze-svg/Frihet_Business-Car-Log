@@ -26,6 +26,11 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024, files: 10 },
   fileFilter: (req, file, cb) => cb(null, /^image\/|application\/pdf/.test(file.mimetype)),
 });
+const dayUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 40 },
+  fileFilter: (req, file, cb) => cb(null, /^image\/|application\/pdf/.test(file.mimetype)),
+});
 const xlsxUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 let JWT_SECRET = process.env.JWT_SECRET;
@@ -263,7 +268,7 @@ app.delete('/api/vehicle-models/:id', auth, admin, wrap(async (req, res) => {
 // ---------- 외부 연동 ----------
 app.get('/api/places', auth, wrap(async (req, res) => {
   const query = String(req.query.q || '').trim();
-  if (query.length < 2) return res.json([]);
+  if (query.length < 1) return res.json([]);
   res.json(await ext.searchPlaces(query));
 }));
 app.get('/api/route', auth, wrap(async (req, res) => {
@@ -372,6 +377,40 @@ app.delete('/api/trips/:id', auth, wrap(async (req, res) => {
   assertOwner(req, cur.user_id);
   await q('DELETE FROM trips WHERE id=$1', [cur.id]);
   res.json({ ok: true });
+}));
+
+// ---------- 하루 단위 일괄 등록 (여러 구간 운행 + 법인/개인 카드 사용 + 건별 사진) ----------
+app.post('/api/day', auth, dayUpload.any(), wrap(async (req, res) => {
+  let b;
+  try { b = JSON.parse(req.body.payload || '{}'); } catch { throw bad('요청 형식 오류'); }
+  if (!isDate(b.date)) throw bad('운행일자를 입력하세요');
+  const uid = targetUserId(req, b.user_id);
+  const legs = (b.legs || []).filter((l) => str(l.start_name) || str(l.end_name) || num(l.distance_km));
+  const exps = (b.expenses || []).filter((e) => int(e.amount));
+  if (!legs.length && !exps.length) throw bad('운행 구간 또는 카드 사용 내역을 1건 이상 입력하세요');
+  const tripVals = [];
+  for (const l of legs) {
+    tripVals.push(await tripValues(req, { ...l, trip_date: b.date, vehicle_id: b.vehicle_id, fuel_price_won: b.fuel_price_won, efficiency_km_l: b.efficiency_km_l }, uid));
+  }
+  const expVals = exps.map((e) => ({ v: expenseValues({ ...e, expense_date: b.date, vehicle_id: b.vehicle_id }, uid), key: e.key }));
+  const client = await pool.connect();
+  const out = { trips: 0, expenses: 0, photos: 0 };
+  try {
+    await client.query('BEGIN');
+    const ph = (n) => Array.from({ length: n }, (_, i) => '$' + (i + 1)).join(',');
+    for (const v of tripVals) { await client.query(`INSERT INTO trips(${TRIP_COLS}) VALUES(${ph(v.length)})`, v); out.trips++; }
+    for (const { v, key } of expVals) {
+      const r = await client.query('INSERT INTO expenses(user_id,vehicle_id,expense_date,card_type,category,purpose,amount,memo) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id', v);
+      out.expenses++;
+      for (const f of (req.files || []).filter((x) => x.fieldname === 'photo_' + key)) {
+        await client.query('INSERT INTO photos(owner_type,owner_id,filename,mime,size,data,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)',
+          ['expense', r.rows[0].id, Buffer.from(f.originalname, 'latin1').toString('utf8'), f.mimetype, f.size, f.buffer, req.user.id]);
+        out.photos++;
+      }
+    }
+    await client.query('COMMIT');
+  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+  res.json(out);
 }));
 
 // ---------- 카드 사용 내역 ----------
@@ -484,7 +523,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
          e AS (SELECT user_id,
                  sum(amount) FILTER (WHERE card_type='corporate') corp,
                  sum(amount) FILTER (WHERE card_type='personal') personal,
-                 sum(amount) FILTER (WHERE category='주유') fueling,
+                 sum(amount) FILTER (WHERE category IN ('주유','주유비')) fueling,
                  count(*) cnt
                FROM expenses WHERE expense_date BETWEEN $1 AND $2 GROUP BY user_id),
          m AS (SELECT user_id, sum(amount) amt, count(*) cnt FROM maintenance WHERE maint_date BETWEEN $1 AND $2 GROUP BY user_id)
@@ -507,7 +546,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
       UNION ALL
       SELECT user_id, to_char(expense_date,'YYYY-MM'), 0,0,0,0,
              sum(amount) FILTER (WHERE card_type='corporate'), sum(amount) FILTER (WHERE card_type='personal'),
-             sum(amount) FILTER (WHERE category='주유')
+             sum(amount) FILTER (WHERE category IN ('주유','주유비'))
         FROM expenses WHERE expense_date BETWEEN $1 AND $2 GROUP BY 1,2)
     SELECT ym, sum(km)::float distance_km, sum(fuel)::int fuel_cost_won, sum(toll)::int toll_won,
       (sum(fuel)+sum(toll)+sum(parking))::int operating_cost_won,
