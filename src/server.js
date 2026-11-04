@@ -83,12 +83,14 @@ const auth = wrap(async (req, res, next) => {
 });
 const admin = (req, res, next) => (req.user.role === 'admin' ? next() : next(bad('관리자 권한이 필요합니다', 403)));
 const isAdmin = (req) => req.user.role === 'admin';
-const isLead = (u) => u && (u.role === 'admin' || /팀장/.test(u.position || ''));
+// 법인카드 일지 사용자: 직책에 '팀장' 포함 또는 카드 구분(team_card) 지정 (관리자라도 지정 없으면 제외)
+const isHolder = (u) => !!u && (!!u.team_card || /팀장/.test(u.position || ''));
+const cardLabel = (u) => u.team_card || '팀장카드';
 // 장부: drive(운행일지) / team(부서팀장 법인카드) — team은 팀장·관리자만, 법인카드만
 async function resolveBook(req, book, userId) {
   if (book !== 'team') return 'drive';
-  const u = (await q('SELECT role, position FROM users WHERE id=$1', [userId])).rows[0];
-  if (!isLead(req.user) || !isLead(u)) throw bad('부서팀장 법인카드 일지는 팀장만 사용할 수 있습니다', 403);
+  const u = (await q('SELECT role, position, team_card FROM users WHERE id=$1', [userId])).rows[0];
+  if (!isHolder(u) || !(req.user.role === 'admin' || req.user.id === userId)) throw bad('법인카드 일지 사용 대상이 아닙니다', 403);
   return 'team';
 }
 // 일반 직원은 본인 데이터만, 관리자는 지정 직원 데이터
@@ -134,7 +136,7 @@ app.get('/api/me', auth, wrap(async (req, res) => {
   const v = await q('SELECT * FROM vehicles WHERE user_id=$1 AND active ORDER BY id', [u.id]);
   res.json({
     id: u.id, email: u.email, name: u.name, nickname: u.nickname, department: u.department,
-    position: u.position, role: u.role, must_change_password: u.must_change_password, vehicles: v.rows, is_lead: isLead(u),
+    position: u.position, role: u.role, must_change_password: u.must_change_password, vehicles: v.rows, is_lead: u.role === 'admin' || isHolder(u), is_holder: isHolder(u), team_card: u.team_card,
   });
 }));
 
@@ -143,7 +145,7 @@ app.get('/api/users', auth, wrap(async (req, res) => {
   const where = isAdmin(req) ? (req.query.all ? '' : 'WHERE u.active') : 'WHERE u.id=$1';
   const params = isAdmin(req) ? [] : [req.user.id];
   const r = await q(
-    `SELECT u.id,u.email,u.name,u.nickname,u.department,u.position,u.role,u.active,u.deactivated_at,
+    `SELECT u.id,u.email,u.name,u.nickname,u.department,u.position,u.role,u.active,u.deactivated_at,u.team_card,
       COALESCE(json_agg(v ORDER BY v.id) FILTER (WHERE v.id IS NOT NULL),'[]') AS vehicles
      FROM users u LEFT JOIN vehicles v ON v.user_id=u.id AND v.active
      ${where} GROUP BY u.id ORDER BY u.department NULLS LAST, u.name`, params
@@ -189,8 +191,9 @@ app.put('/api/users/:id', auth, admin, wrap(async (req, res) => {
   const email = String(b.email || '').trim().toLowerCase();
   if (!email.endsWith(DOMAIN)) throw bad('이메일은 @cafefrihet.com 계정이어야 합니다');
   await q(
-    'UPDATE users SET email=$1,name=$2,nickname=$3,department=$4,position=$5,role=$6 WHERE id=$7',
-    [email, str(b.name), str(b.nickname), str(b.department), str(b.position), b.role === 'admin' ? 'admin' : 'user', int(req.params.id)]
+    'UPDATE users SET email=$1,name=$2,nickname=$3,department=$4,position=$5,role=$6,team_card=COALESCE($8,team_card) WHERE id=$7',
+    [email, str(b.name), str(b.nickname), str(b.department), str(b.position), b.role === 'admin' ? 'admin' : 'user', int(req.params.id),
+      b.team_card === undefined ? null : String(b.team_card).trim()]
   );
   res.json({ ok: true });
 }));
@@ -547,8 +550,8 @@ app.delete('/api/expenses/:id', auth, wrap(async (req, res) => {
 
 // ---------- 법인카드 사용 관리 (관리자) ----------
 app.get('/api/leads', auth, wrap(async (req, res) => {
-  const r = await q(`SELECT id,name,nickname,department,position,active FROM users WHERE (role='admin' OR position LIKE '%팀장%') ${isAdmin(req) ? '' : 'AND id=$1'} ORDER BY department NULLS LAST, name`, isAdmin(req) ? [] : [req.user.id]);
-  res.json(r.rows);
+  const r = await q(`SELECT id,name,nickname,department,position,active,team_card FROM users WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') ${isAdmin(req) ? '' : 'AND id=$1'} ORDER BY department NULLS LAST, name`, isAdmin(req) ? [] : [req.user.id]);
+  res.json(r.rows.map((u) => ({ ...u, card_label: cardLabel(u) })));
 }));
 app.get('/api/card-stats', auth, admin, wrap(async (req, res) => {
   const { from, to } = period(req);

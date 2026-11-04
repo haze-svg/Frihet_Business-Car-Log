@@ -123,7 +123,7 @@ async function boot() {
   $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden');
   $('#me-name').innerHTML = `<b>${userLabel(state.me)}</b><br><span class="note">${esc(state.me.department || '')} ${esc(state.me.position || '')}</span>`;
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
-  $$('.lead-only').forEach((el) => el.classList.toggle('hidden', !state.me.is_lead));
+  $$('.lead-only').forEach((el) => el.classList.toggle('hidden', !(isAdmin() || state.me.is_holder)));
   if (state.me.must_change_password) { $('#main').innerHTML = '<div class="card">최초 로그인입니다. 비밀번호를 변경한 뒤 이용할 수 있습니다.</div>'; changePassword(true); return; }
   api('/api/public-config').then((c) => (state.jsKey = c.kakao_js_key)).catch(() => {});
   window.onhashchange = render;
@@ -590,11 +590,13 @@ function expItemHtml(r) {
 }
 async function pageTeamCard() {
   const main = $('#main');
-  if (!isAdmin()) state.cardUser = state.me;
+  if (!isAdmin()) state.cardUser = state.me.is_holder ? state.me : null;
+  if (!isAdmin() && !state.cardUser) { main.innerHTML = '<div class="card empty">법인카드 일지 사용 대상이 아닙니다.</div>'; return; }
+  if (state.cardUser && !state.cardUser.card_label) state.cardUser.card_label = state.cardUser.team_card || '팀장카드';
   if (!state.cardUser) {
     const leads = await api('/api/leads');
-    main.innerHTML = `<div class="page-head"><h1>부서팀장 법인카드 일지</h1></div><p class="note">팀장을 선택하세요. (직책에 '팀장'이 포함된 직원과 관리자)</p>
-      <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}"><div class="t">${userLabel(u)}</div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
+    main.innerHTML = `<div class="page-head"><h1>부서팀장 법인카드 일지</h1></div><p class="note">카드 사용자를 선택하세요. (직책에 '팀장'이 포함된 직원 + 직원·차량 관리에서 카드 구분을 지정한 직원)</p>
+      <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}"><div class="row" style="justify-content:space-between"><div class="t">${userLabel(u)}</div><span class="badge corp">${esc(u.card_label)}</span></div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
     $$('[data-uid]', main).forEach((el) => (el.onclick = () => go('teamcard/u/' + el.dataset.uid)));
     return;
   }
@@ -604,7 +606,7 @@ async function pageTeamCard() {
   const days = {}; rows.forEach((r) => (days[r.expense_date.slice(0, 10)] ||= []).push(r));
   const cats = {}; rows.forEach((r) => (cats[r.category] = (cats[r.category] || 0) + r.amount));
   main.innerHTML = `<div class="crumb">${isAdmin() ? `${backBtn('teamcard')} <a id="back">부서팀장 법인카드 일지</a> / ` : ''}${userLabel(u)}</div>
-    <div class="page-head"><h1>${userLabel(u)} 법인카드 일지</h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
+    <div class="page-head"><h1>${userLabel(u)} 법인카드 일지 <span class="badge corp">${esc(u.card_label)}</span></h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
     <div class="kpis"><div class="kpi"><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
       <div class="kpi"><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
       <div class="kpi"><div class="l">영수증 사진</div><div class="v">${nPh}장</div></div>
@@ -932,6 +934,7 @@ function userForm(u, models, done = pageStaff) {
       <label>직책<input name="position" value="${esc(u?.position || '')}"></label>
       <label>권한<select name="role"><option value="user">직원</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>관리자</option></select></label></div>
     <label>회사 이메일 (@cafefrihet.com)<input name="email" type="email" value="${esc(u?.email || '')}"></label>
+    <label>법인카드 일지 구분 (비우면 직책이 '팀장'인 경우에만 팀장카드로 사용)<input name="team_card" list="tc-list" value="${esc(u?.team_card || '')}" placeholder="예: 총무카드"><datalist id="tc-list"><option value="총무카드"><option value="팀장카드"></datalist></label>
     ${u ? `<h2 style="margin-top:6px">등록 차량</h2>${(u.vehicles || []).map((v) => `<div class="card veh-edit" data-vid="${v.id}" style="display:grid;gap:8px;padding:12px">
         <div class="grid3"><label>차량번호<input name="v_plate" value="${esc(v.plate)}"></label>
           <label>구분<select name="v_ownership">${Object.entries(OWN).map(([k, l]) => `<option value="${k}" ${v.ownership === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -943,7 +946,7 @@ function userForm(u, models, done = pageStaff) {
     <div class="modal-actions"><button class="btn" data-close>취소</button><button class="btn primary" id="save">저장</button></div>`);
   if (!u) bindVehicleFields(c, models);
   $('#save', c).onclick = async () => {
-    const body = {}; ['name', 'nickname', 'department', 'position', 'role', 'email'].forEach((n) => (body[n] = $(`[name=${n}]`, c).value));
+    const body = {}; ['name', 'nickname', 'department', 'position', 'role', 'email', 'team_card'].forEach((n) => (body[n] = $(`[name=${n}]`, c).value));
     if (!u) body.vehicle = vehicleBody(c);
     try {
       const r = await api(u ? `/api/users/${u.id}` : '/api/users', { method: u ? 'PUT' : 'POST', body });
