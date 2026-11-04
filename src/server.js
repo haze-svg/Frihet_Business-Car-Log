@@ -534,7 +534,7 @@ app.put('/api/expenses/:id', auth, upload.array('photos', 10), wrap(async (req, 
   assertOwner(req, cur.user_id);
   if (cur.book === 'team') req.body.card_type = 'corporate';
   const v = expenseValues(req.body, cur.user_id);
-  await q('UPDATE expenses SET vehicle_id=$2,expense_date=$3,card_type=$4,category=$5,purpose=$6,amount=$7,memo=$8 WHERE id=$9',
+  await q('UPDATE expenses SET user_id=$1,vehicle_id=$2,expense_date=$3,card_type=$4,category=$5,purpose=$6,amount=$7,memo=$8 WHERE id=$9',
     [...v, cur.id]);
   await savePhotos('expense', cur.id, req.files, req.user.id);
   res.json({ ok: true });
