@@ -17,6 +17,7 @@ function parsePayload(buf) {
     raw = entry.getData();
   } else raw = buf[0] === 0x1f && buf[1] === 0x8b ? zlib.gunzipSync(buf) : buf;
   const data = JSON.parse(raw.toString('utf8'));
+  if (data.version === 'patch') { data.readFile = (p) => { const e = zip && zip.getEntry(p); return e ? e.getData() : null; }; return data; }
   if (![1, 2].includes(data.version) || !Array.isArray(data.trips)) throw Object.assign(new Error('이관 데이터 형식이 올바르지 않습니다'), { status: 400 });
   data.readFile = (p) => {
     const e = zip && zip.getEntry(p);
@@ -25,8 +26,59 @@ function parsePayload(buf) {
   return data;
 }
 
+// 보정 패키지: 일자 미기재 건을 영수증 일자로 수정 + 해당 건에 영수증 사진 첨부 + 구글시트 월별 영수증 묶음
+// 다른 기록은 지우지 않음. 같은 패키지를 다시 올려도 이미 수정된 건은 건너뜀(메모 '미기재' 조건)
+async function applyPatch(data, dryRun) {
+  const client = await pool.connect();
+  const rep = { patch: true, date_fixed: 0, not_found: [], photos: 0, missing_photos: 0, receipt_groups: 0, dry_run: dryRun };
+  try {
+    await client.query('BEGIN');
+    const users = (await client.query('SELECT id, name FROM users')).rows;
+    const uid = (n) => (users.find((x) => x.name === n) || {}).id || null;
+    const addPhoto = async (ownerId, path) => {
+      const b = data.readFile(path);
+      if (!b) { rep.missing_photos++; return; }
+      const dup = await client.query("SELECT 1 FROM photos WHERE owner_type='expense' AND owner_id=$1 AND filename=$2 AND size=$3", [ownerId, path.split('/').pop(), b.length]);
+      if (dup.rowCount) return;
+      await client.query('INSERT INTO photos(owner_type,owner_id,filename,mime,size,data) VALUES($1,$2,$3,$4,$5,$6)',
+        ['expense', ownerId, path.split('/').pop(), 'image/jpeg', b.length, b]);
+      rep.photos++;
+    };
+    for (const f of data.date_fixes || []) {
+      const u = uid(f.name);
+      const r = u && (await client.query(
+        `SELECT id FROM expenses WHERE user_id=$1 AND expense_date=$2 AND amount=$3 AND left(COALESCE(purpose,''), length($4))=$4 AND memo LIKE '%미기재%' ORDER BY id LIMIT 1`,
+        [u, f.cur_date, f.amount, f.purpose || ''])).rows[0];
+      if (!r) { rep.not_found.push(`${f.name} ${f.cur_date} ${f.amount}`); continue; }
+      await client.query('UPDATE expenses SET expense_date=$1, memo=$2 WHERE id=$3', [f.new_date, f.memo || '영수증 일자 반영 (원본 일자 미기재)', r.id]);
+      rep.date_fixed++;
+      for (const p of f.files || []) await addPhoto(r.id, p);
+    }
+    for (const g of data.receipt_groups || []) {
+      const u = uid(g.name);
+      if (!u) continue;
+      await client.query("DELETE FROM photos WHERE owner_type='expense' AND owner_id IN (SELECT id FROM expenses WHERE user_id=$1 AND expense_date=$2 AND card_type='receipt' AND source=$3)", [u, g.month + '-01', g.source || 'gsheet']);
+      await client.query("DELETE FROM expenses WHERE user_id=$1 AND expense_date=$2 AND card_type='receipt' AND source=$3", [u, g.month + '-01', g.source || 'gsheet']);
+      const r = await client.query(
+        `INSERT INTO expenses(user_id,expense_date,card_type,category,purpose,amount,memo,source)
+         VALUES($1,$2,'receipt','영수증(이관)',$3,0,$4,$5) RETURNING id`,
+        [u, g.month + '-01', `${g.month} 영수증 일괄 (${g.files.length}장)`, g.memo || '구글시트 이관 · 월 단위 첨부', g.source || 'gsheet']);
+      for (const p of g.files) await addPhoto(r.rows[0].id, p);
+      rep.receipt_groups++;
+    }
+    await client.query(dryRun ? 'ROLLBACK' : 'COMMIT');
+    return rep;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function importLegacy(buf, { dryRun = false } = {}) {
   const data = parsePayload(buf);
+  if (data.version === 'patch') return applyPatch(data, dryRun);
   const client = await pool.connect();
   const rep = { vehicles_created: 0, vehicles_updated: 0, trips: 0, expenses: 0, maintenance: 0, receipt_groups: 0, photos: 0, missing_photos: 0, unmatched_names: {}, dry_run: dryRun };
   try {
