@@ -161,6 +161,11 @@ h3.sec { font-size: 15px; margin: 10px 0 0; padding-top: 12px; border-top: 1px s
 .al-why { font-size: 12px; color: var(--ink); background: #faf6f0; border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
 .al-why:empty { display: none; }
 
+.sum-tabs { display: flex; gap: 6px; }
+.sum-tab { font: inherit; font-size: 17px; font-weight: 700; padding: 8px 16px; border-radius: 10px; border: 2px solid var(--line); background: #fff; color: var(--muted); cursor: pointer; }
+.sum-tab.on { border-color: #c0392b; color: var(--ink); }
+.sum-tab:hover { border-color: var(--accent); }
+
 @media (max-width: 860px) {
   .veh-specs { grid-template-columns: 1fr 1fr; }
   .veh-board { grid-template-columns: 1fr; }

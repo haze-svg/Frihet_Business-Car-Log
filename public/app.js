@@ -820,10 +820,40 @@ function maintForm(v, rec) {
 
 // ========== 통합 합계관리 ==========
 state.sumUsers = [];
+state.sumView = 'drive';
+function summaryTabs() {
+  const canTeam = isAdmin() || state.me.is_holder;
+  return `<div class="sum-tabs"><button class="sum-tab ${state.sumView === 'drive' ? 'on' : ''}" data-sumview="drive">통합 합계관리</button>${canTeam ? `<button class="sum-tab ${state.sumView === 'team' ? 'on' : ''}" data-sumview="team">부서팀장 법인카드 합계관리</button>` : ''}</div>`;
+}
+function bindSummaryTabs(main) { $$('[data-sumview]', main).forEach((b) => (b.onclick = () => { state.sumView = b.dataset.sumview; pageSummary(); })); }
+async function pageTeamSummary() {
+  const main = $('#main');
+  const d = await api(`/api/team-summary?${rq()}`);
+  const tot = d.users.reduce((a, u) => a + u.amount, 0), cnt = d.users.reduce((a, u) => a + u.cnt, 0);
+  const cats = [...TEAM_CATS.filter((c) => d.categories.includes(c)), ...d.categories.filter((c) => !TEAM_CATS.includes(c))];
+  const maxM = Math.max(1, ...d.monthly.map((m) => m.amount));
+  main.innerHTML = `<div class="page-head">${summaryTabs()}<div class="grow"></div>${rangeControls(pageSummary)}</div>
+    <div class="kpis"><div class="kpi"><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div></div>
+      <div class="kpi"><div class="l">사용 건수</div><div class="v">${cnt}건</div></div>
+      <div class="kpi"><div class="l">부서회식</div><div class="v">${won(d.users.reduce((a, u) => a + (u.by['부서회식'] || 0), 0))}원</div></div>
+      <div class="kpi"><div class="l">영수증 사진</div><div class="v">${d.users.reduce((a, u) => a + u.photos, 0)}장</div></div></div>
+    <h2>사용자별 비교</h2>
+    <div class="table-wrap"><table><thead><tr><th>부서</th><th>사용자</th><th>구분</th><th class="n">건수</th>${cats.map((c) => `<th class="n">${esc(c)}</th>`).join('')}<th class="n">합계</th><th class="n">영수증</th></tr></thead>
+      <tbody>${d.users.map((u) => `<tr class="clickable" data-uid="${u.id}"><td>${esc(u.department || '')}</td><td>${userLabel(u)}</td><td><span class="badge corp">${esc(u.card_label)}</span></td><td class="n">${u.cnt}</td>
+        ${cats.map((c) => `<td class="n">${won(u.by[c] || 0)}</td>`).join('')}<td class="n"><b>${won(u.amount)}</b></td><td class="n">${u.photos}</td></tr>`).join('') || `<tr><td colspan="${cats.length + 6}" class="empty">데이터 없음</td></tr>`}</tbody>
+      <tfoot><tr><td colspan="3">합계</td><td class="n">${cnt}</td>${cats.map((c) => `<td class="n">${won(d.users.reduce((a, u) => a + (u.by[c] || 0), 0))}</td>`).join('')}<td class="n">${won(tot)}</td><td></td></tr></tfoot></table></div>
+    <p class="note">행을 누르면 해당 사용자의 법인카드 일지로 이동합니다.</p>
+    <h2 style="margin-top:20px">월별 추이</h2>
+    <div class="card"><div class="bars">${d.monthly.map((m) => `<div class="bar-row"><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원 · ${m.cnt}건</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>`;
+  bindSummaryTabs(main);
+  $$('tr[data-uid]', main).forEach((tr) => (tr.onclick = () => go('teamcard/u/' + tr.dataset.uid)));
+}
 async function pageSummary() {
+  if (state.sumView === 'team' && (isAdmin() || state.me.is_holder)) return pageTeamSummary();
   const main = $('#main');
   const ids = state.sumUsers.join(',');
-  const [data, users] = await Promise.all([api(`/api/summary?${rq()}${ids ? '&user_ids=' + ids : ''}`), isAdmin() ? api('/api/users?all=1') : Promise.resolve([])]);
+  const [data, users0] = await Promise.all([api(`/api/summary?${rq()}${ids ? '&user_ids=' + ids : ''}`), isAdmin() ? api('/api/users?all=1') : Promise.resolve([])]);
+  const users = users0.filter((u) => !/대표/.test(u.position || ''));
   const U = data.users;
   const sum = (k) => U.reduce((a, r) => a + Number(r[k] || 0), 0);
   const cols = [
@@ -833,7 +863,7 @@ async function pageSummary() {
   ];
   const maxOp = Math.max(1, ...data.monthly.map((m) => m.operating_cost_won));
   const maxCard = Math.max(1, ...data.monthly.map((m) => m.corporate_card_won + m.personal_card_won));
-  main.innerHTML = `<div class="page-head"><h1>통합 합계관리</h1><div class="grow"></div>${rangeControls(pageSummary)}</div>
+  main.innerHTML = `<div class="page-head">${summaryTabs()}<div class="grow"></div>${rangeControls(pageSummary)}</div>
     ${isAdmin() ? `<div class="card" style="margin-bottom:14px"><div class="row"><b style="font-size:13px">직원 선택</b>
       <button class="btn sm" id="sel-all">전체 비교</button>
       ${users.map((u) => `<label class="inline" style="font-size:13px;color:var(--ink);font-weight:400"><input type="checkbox" value="${u.id}" style="width:auto" ${state.sumUsers.includes(u.id) ? 'checked' : ''}>${userLabel(u)}${u.active ? '' : ' <span class="badge off">퇴사</span>'}</label>`).join('')}
@@ -860,6 +890,7 @@ async function pageSummary() {
     if (!isAdmin()) return go('trips');
     go('trips/u/' + tr.dataset.uid);
   }));
+  bindSummaryTabs(main);
   $('#sel-all')?.addEventListener('click', () => { state.sumUsers = []; pageSummary(); });
   $$('.card input[type=checkbox]', main).forEach((cb) => (cb.onchange = () => {
     state.sumUsers = $$('.card input[type=checkbox]:checked', main).map((x) => Number(x.value)); pageSummary();

@@ -650,7 +650,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
       COALESCE(e.fueling,0)::int fueling_won, COALESCE(e.cnt,0)::int expense_count,
       COALESCE(m.amt,0)::int maintenance_won, COALESCE(m.cnt,0)::int maintenance_count
     FROM users u LEFT JOIN t ON t.user_id=u.id LEFT JOIN e ON e.user_id=u.id LEFT JOIN m ON m.user_id=u.id
-    WHERE (u.active OR t.cnt IS NOT NULL OR e.cnt IS NOT NULL) ${userFilter}
+    WHERE (u.active OR t.cnt IS NOT NULL OR e.cnt IS NOT NULL) AND COALESCE(u.position,'') NOT LIKE '%대표%' ${userFilter}
     ORDER BY u.department NULLS LAST, u.name`, params);
 
   const monthly = await q(`
@@ -667,10 +667,34 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
       (sum(fuel)+sum(toll)+sum(parking))::int operating_cost_won,
       COALESCE(sum(corp),0)::int corporate_card_won, COALESCE(sum(personal),0)::int personal_card_won,
       COALESCE(sum(fueling),0)::int fueling_won
-    FROM months JOIN users u ON u.id=months.user_id WHERE true ${userFilter}
+    FROM months JOIN users u ON u.id=months.user_id WHERE COALESCE(u.position,'') NOT LIKE '%대표%' ${userFilter}
     GROUP BY ym ORDER BY ym`, params);
 
   res.json({ from, to, users: perUser.rows, monthly: monthly.rows });
+}));
+
+// ---------- 부서팀장 법인카드 합계관리 ----------
+app.get('/api/team-summary', auth, wrap(async (req, res) => {
+  const { from, to } = period(req);
+  const holders = (await q(`SELECT id,name,nickname,department,position,active,team_card FROM users
+    WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') ORDER BY department NULLS LAST, name`)).rows
+    .filter((u) => isAdmin(req) || u.id === req.user.id);
+  const ids = holders.map((u) => u.id);
+  if (!ids.length) return res.json({ from, to, users: [], categories: [], monthly: [] });
+  const per = (await q(`SELECT user_id, category, count(*)::int cnt, sum(amount)::int amount FROM expenses
+    WHERE book='team' AND expense_date BETWEEN $1 AND $2 AND user_id = ANY($3) GROUP BY 1,2`, [from, to, ids])).rows;
+  const ph = (await q(`SELECT e.user_id, count(p.id)::int n FROM expenses e JOIN photos p ON p.owner_type='expense' AND p.owner_id=e.id
+    WHERE e.book='team' AND e.expense_date BETWEEN $1 AND $2 AND e.user_id = ANY($3) GROUP BY 1`, [from, to, ids])).rows;
+  const monthly = (await q(`SELECT to_char(expense_date,'YYYY-MM') ym, sum(amount)::int amount, count(*)::int cnt FROM expenses
+    WHERE book='team' AND expense_date BETWEEN $1 AND $2 AND user_id = ANY($3) GROUP BY 1 ORDER BY 1`, [from, to, ids])).rows;
+  const cats = [...new Set(per.map((x) => x.category))];
+  const users = holders.map((u) => {
+    const rows = per.filter((x) => x.user_id === u.id);
+    const by = {}; rows.forEach((x) => (by[x.category] = x.amount));
+    return { ...u, card_label: u.team_card || '팀장카드', cnt: rows.reduce((a, x) => a + x.cnt, 0), amount: rows.reduce((a, x) => a + x.amount, 0),
+      photos: (ph.find((x) => x.user_id === u.id) || {}).n || 0, by };
+  });
+  res.json({ from, to, users, categories: cats, monthly });
 }));
 
 // ---------- 설정 (관리자) ----------
