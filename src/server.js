@@ -83,6 +83,14 @@ const auth = wrap(async (req, res, next) => {
 });
 const admin = (req, res, next) => (req.user.role === 'admin' ? next() : next(bad('관리자 권한이 필요합니다', 403)));
 const isAdmin = (req) => req.user.role === 'admin';
+const isLead = (u) => u && (u.role === 'admin' || /팀장/.test(u.position || ''));
+// 장부: drive(운행일지) / team(부서팀장 법인카드) — team은 팀장·관리자만, 법인카드만
+async function resolveBook(req, book, userId) {
+  if (book !== 'team') return 'drive';
+  const u = (await q('SELECT role, position FROM users WHERE id=$1', [userId])).rows[0];
+  if (!isLead(req.user) || !isLead(u)) throw bad('부서팀장 법인카드 일지는 팀장만 사용할 수 있습니다', 403);
+  return 'team';
+}
 // 일반 직원은 본인 데이터만, 관리자는 지정 직원 데이터
 function targetUserId(req, requested) {
   if (isAdmin(req) && requested) return int(requested);
@@ -126,7 +134,7 @@ app.get('/api/me', auth, wrap(async (req, res) => {
   const v = await q('SELECT * FROM vehicles WHERE user_id=$1 AND active ORDER BY id', [u.id]);
   res.json({
     id: u.id, email: u.email, name: u.name, nickname: u.nickname, department: u.department,
-    position: u.position, role: u.role, must_change_password: u.must_change_password, vehicles: v.rows,
+    position: u.position, role: u.role, must_change_password: u.must_change_password, vehicles: v.rows, is_lead: isLead(u),
   });
 }));
 
@@ -459,6 +467,8 @@ app.post('/api/day', auth, dayUpload.any(), wrap(async (req, res) => {
   try { b = JSON.parse(req.body.payload || '{}'); } catch { throw bad('요청 형식 오류'); }
   if (!isDate(b.date)) throw bad('운행일자를 입력하세요');
   const uid = targetUserId(req, b.user_id);
+  const book = await resolveBook(req, b.book, uid);
+  if (book === 'team') { b.legs = []; (b.expenses || []).forEach((e) => (e.card_type = 'corporate')); }
   const legs = (b.legs || []).filter((l) => str(l.start_name) || str(l.end_name) || num(l.distance_km));
   const exps = (b.expenses || []).filter((e) => int(e.amount));
   if (!legs.length && !exps.length) throw bad('운행 구간 또는 카드 사용 내역을 1건 이상 입력하세요');
@@ -474,7 +484,7 @@ app.post('/api/day', auth, dayUpload.any(), wrap(async (req, res) => {
     const ph = (n) => Array.from({ length: n }, (_, i) => '$' + (i + 1)).join(',');
     for (const v of tripVals) { await client.query(`INSERT INTO trips(${TRIP_COLS}) VALUES(${ph(v.length)})`, v); out.trips++; }
     for (const { v, key } of expVals) {
-      const r = await client.query('INSERT INTO expenses(user_id,vehicle_id,expense_date,card_type,category,purpose,amount,memo) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id', v);
+      const r = await client.query('INSERT INTO expenses(user_id,vehicle_id,expense_date,card_type,category,purpose,amount,memo,book) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id', [...v, book]);
       out.expenses++;
       for (const f of (req.files || []).filter((x) => x.fieldname === 'photo_' + key)) {
         await client.query('INSERT INTO photos(owner_type,owner_id,filename,mime,size,data,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)',
@@ -493,7 +503,7 @@ app.get('/api/expenses', auth, wrap(async (req, res) => {
   const uid = targetUserId(req, req.query.user_id);
   const r = await q(
     `SELECT e.*, v.plate FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id
-     WHERE e.user_id=$1 AND e.expense_date BETWEEN $2 AND $3 ORDER BY e.expense_date DESC, e.id DESC`, [uid, from, to]
+     WHERE e.user_id=$1 AND e.expense_date BETWEEN $2 AND $3 AND e.book=$4 ORDER BY e.expense_date DESC, e.id DESC`, [uid, from, to, req.query.book === 'team' ? 'team' : 'drive']
   );
   const photos = await photoList('expense', r.rows.map((x) => x.id));
   res.json(r.rows.map((x) => ({ ...x, photos: photos[x.id] || [] })));
@@ -506,9 +516,11 @@ function expenseValues(b, userId) {
 }
 app.post('/api/expenses', auth, upload.array('photos', 10), wrap(async (req, res) => {
   const uid = targetUserId(req, req.body.user_id);
+  const book = await resolveBook(req, req.body.book, uid);
+  if (book === 'team') req.body.card_type = 'corporate';
   const r = await q(
-    'INSERT INTO expenses(user_id,vehicle_id,expense_date,card_type,category,purpose,amount,memo) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',
-    expenseValues(req.body, uid)
+    'INSERT INTO expenses(user_id,vehicle_id,expense_date,card_type,category,purpose,amount,memo,book) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
+    [...expenseValues(req.body, uid), book]
   );
   await savePhotos('expense', r.rows[0].id, req.files, req.user.id);
   res.json({ id: r.rows[0].id });
@@ -517,6 +529,7 @@ app.put('/api/expenses/:id', auth, upload.array('photos', 10), wrap(async (req, 
   const cur = (await q('SELECT * FROM expenses WHERE id=$1', [int(req.params.id)])).rows[0];
   if (!cur) throw bad('기록 없음', 404);
   assertOwner(req, cur.user_id);
+  if (cur.book === 'team') req.body.card_type = 'corporate';
   const v = expenseValues(req.body, cur.user_id);
   await q('UPDATE expenses SET vehicle_id=$2,expense_date=$3,card_type=$4,category=$5,purpose=$6,amount=$7,memo=$8 WHERE id=$9',
     [...v, cur.id]);
@@ -530,6 +543,31 @@ app.delete('/api/expenses/:id', auth, wrap(async (req, res) => {
   await q("DELETE FROM photos WHERE owner_type='expense' AND owner_id=$1", [cur.id]);
   await q('DELETE FROM expenses WHERE id=$1', [cur.id]);
   res.json({ ok: true });
+}));
+
+// ---------- 법인카드 사용 관리 (관리자) ----------
+app.get('/api/leads', auth, wrap(async (req, res) => {
+  const r = await q(`SELECT id,name,nickname,department,position,active FROM users WHERE (role='admin' OR position LIKE '%팀장%') ${isAdmin(req) ? '' : 'AND id=$1'} ORDER BY department NULLS LAST, name`, isAdmin(req) ? [] : [req.user.id]);
+  res.json(r.rows);
+}));
+app.get('/api/card-stats', auth, admin, wrap(async (req, res) => {
+  const { from, to } = period(req);
+  const book = ['drive', 'team'].includes(req.query.book) ? req.query.book : 'all';
+  const cond = `e.card_type='corporate' AND e.expense_date BETWEEN $1 AND $2 ${book === 'all' ? '' : `AND e.book='${book}'`}`;
+  const users = await q(`SELECT u.id,u.name,u.nickname,u.department,u.position,u.active,
+      count(*)::int cnt, sum(e.amount)::int amount,
+      sum(e.amount) FILTER (WHERE e.book='drive')::int drive_amount, sum(e.amount) FILTER (WHERE e.book='team')::int team_amount,
+      (SELECT count(*) FROM photos p WHERE p.owner_type='expense' AND p.owner_id = ANY(array_agg(e.id)))::int photos
+    FROM expenses e JOIN users u ON u.id=e.user_id WHERE ${cond} GROUP BY u.id ORDER BY amount DESC`, [from, to]);
+  const cats = await q(`SELECT e.category, count(*)::int cnt, sum(e.amount)::int amount FROM expenses e WHERE ${cond} GROUP BY 1 ORDER BY 3 DESC`, [from, to]);
+  const months = await q(`SELECT to_char(e.expense_date,'YYYY-MM') ym, sum(e.amount)::int amount,
+      COALESCE(sum(e.amount) FILTER (WHERE e.book='drive'),0)::int drive_amount, COALESCE(sum(e.amount) FILTER (WHERE e.book='team'),0)::int team_amount
+    FROM expenses e WHERE ${cond} GROUP BY 1 ORDER BY 1`, [from, to]);
+  const items = await q(`SELECT e.id,e.expense_date,e.category,e.purpose,e.amount,e.book,e.memo,u.name,u.nickname FROM expenses e JOIN users u ON u.id=e.user_id
+    WHERE ${cond} ORDER BY e.expense_date DESC, e.id DESC LIMIT 300`, [from, to]);
+  const ph = await photoList('expense', items.rows.map((x) => x.id));
+  res.json({ from, to, book, users: users.rows, categories: cats.rows, monthly: months.rows,
+    items: items.rows.map((x) => ({ ...x, photos: ph[x.id] || [] })) });
 }));
 
 // ---------- 차량관리·점검일지 ----------
@@ -599,7 +637,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
                  sum(amount) FILTER (WHERE card_type='personal') personal,
                  sum(amount) FILTER (WHERE category IN ('주유','주유비')) fueling,
                  count(*) cnt
-               FROM expenses WHERE expense_date BETWEEN $1 AND $2 GROUP BY user_id),
+               FROM expenses WHERE expense_date BETWEEN $1 AND $2 AND book='drive' GROUP BY user_id),
          m AS (SELECT user_id, sum(amount) amt, count(*) cnt FROM maintenance WHERE maint_date BETWEEN $1 AND $2 GROUP BY user_id)
     SELECT u.id, u.name, u.nickname, u.department, u.position, u.active,
       COALESCE(t.cnt,0)::int trip_count, COALESCE(t.km,0)::float distance_km, COALESCE(t.toll,0)::int toll_won,
@@ -621,7 +659,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
       SELECT user_id, to_char(expense_date,'YYYY-MM'), 0,0,0,0,
              sum(amount) FILTER (WHERE card_type='corporate'), sum(amount) FILTER (WHERE card_type='personal'),
              sum(amount) FILTER (WHERE category IN ('주유','주유비'))
-        FROM expenses WHERE expense_date BETWEEN $1 AND $2 GROUP BY 1,2)
+        FROM expenses WHERE expense_date BETWEEN $1 AND $2 AND book='drive' GROUP BY 1,2)
     SELECT ym, sum(km)::float distance_km, sum(fuel)::int fuel_cost_won, sum(toll)::int toll_won,
       (sum(fuel)+sum(toll)+sum(parking))::int operating_cost_won,
       COALESCE(sum(corp),0)::int corporate_card_won, COALESCE(sum(personal),0)::int personal_card_won,
@@ -696,7 +734,7 @@ app.get('/api/export', auth, wrap(async (req, res) => {
       distance_km 운행km, toll_won 통행료, fuel_price_won 유가, efficiency_km_l 연비, fuel_cost_won 연료비, parking_won 주차비, memo 비고
       FROM trips WHERE user_id=$1 AND trip_date BETWEEN $2 AND $3 ORDER BY trip_date`, [uid, from, to])).rows;
   const exps = (await q(`SELECT expense_date 일자, CASE card_type WHEN 'corporate' THEN '법인카드' ELSE '개인카드' END 구분,
-      category 항목, purpose 목적, amount 금액, memo 비고 FROM expenses WHERE user_id=$1 AND expense_date BETWEEN $2 AND $3 ORDER BY expense_date`, [uid, from, to])).rows;
+      category 항목, purpose 목적, amount 금액, memo 비고 FROM expenses WHERE user_id=$1 AND expense_date BETWEEN $2 AND $3 AND book='drive' ORDER BY expense_date`, [uid, from, to])).rows;
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(trips), '운행일지');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(exps), '카드사용');

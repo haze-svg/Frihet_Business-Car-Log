@@ -121,6 +121,7 @@ async function boot() {
   $('#login-view').classList.add('hidden'); $('#app-view').classList.remove('hidden');
   $('#me-name').innerHTML = `<b>${userLabel(state.me)}</b><br><span class="note">${esc(state.me.department || '')} ${esc(state.me.position || '')}</span>`;
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
+  $$('.lead-only').forEach((el) => el.classList.toggle('hidden', !state.me.is_lead));
   if (state.me.must_change_password) { $('#main').innerHTML = '<div class="card">최초 로그인입니다. 비밀번호를 변경한 뒤 이용할 수 있습니다.</div>'; changePassword(true); return; }
   api('/api/public-config').then((c) => (state.jsKey = c.kakao_js_key)).catch(() => {});
   window.onhashchange = render;
@@ -137,14 +138,15 @@ async function render() {
   const [page, kind, id] = (location.hash.replace('#', '') || 'trips').split('/');
   state.page = page;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
-  state.tripUser = null; state.vehicle = null;
+  state.tripUser = null; state.vehicle = null; state.cardUser = null;
   try {
     if (page === 'trips' && kind === 'u' && id) {
       state.tripUser = isAdmin() ? (await api('/api/users?all=1')).find((u) => u.id == id) : state.me;
     }
+    if (page === 'teamcard' && kind === 'u' && id) state.cardUser = (await api('/api/leads')).find((u) => u.id == id) || null;
     if (page === 'maintenance' && kind === 'v' && id) state.vehicle = (await api('/api/vehicles')).find((v) => v.id == id) || null;
   } catch (e) { fail(e); }
-  ({ trips: pageTrips, maintenance: pageMaint, summary: pageSummary, staff: pageStaff, settings: pageSettings }[page] || pageTrips)();
+  ({ trips: pageTrips, maintenance: pageMaint, summary: pageSummary, staff: pageStaff, settings: pageSettings, teamcard: pageTeamCard, cardadmin: pageCardAdmin }[page] || pageTrips)();
   window.scrollTo(0, 0);
 }
 const backBtn = (fallback) => `<button class="btn sm back-btn" data-back="${fallback}">← 뒤로</button>`;
@@ -578,6 +580,119 @@ async function dayForm(u, vehicles) {
   };
 }
 
+// ========== 부서팀장 법인카드 일지 ==========
+function expItemHtml(r) {
+  return `<div class="exp-item"><div class="row" style="justify-content:space-between"><span><span class="badge corp">${esc(r.category)}</span> ${esc(r.purpose || '')}</span><b>${won(r.amount)}원</b></div>
+    ${r.photos.length ? `<div class="thumbs big">${r.photos.map((p) => p.mime === 'application/pdf' ? `<a href="/api/photos/${p.id}" target="_blank">PDF</a>` : `<img src="/api/photos/${p.id}" data-full="/api/photos/${p.id}" loading="lazy" alt="">`).join('')}</div>` : '<div class="note">영수증 없음</div>'}
+    ${r.memo ? `<div class="note">${esc(r.memo)}</div>` : ''}<div style="text-align:right"><button class="btn sm" data-edit="${r.id}">수정</button></div></div>`;
+}
+async function pageTeamCard() {
+  const main = $('#main');
+  if (!isAdmin()) state.cardUser = state.me;
+  if (!state.cardUser) {
+    const leads = await api('/api/leads');
+    main.innerHTML = `<div class="page-head"><h1>부서팀장 법인카드 일지</h1></div><p class="note">팀장을 선택하세요. (직책에 '팀장'이 포함된 직원과 관리자)</p>
+      <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}"><div class="t">${userLabel(u)}</div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
+    $$('[data-uid]', main).forEach((el) => (el.onclick = () => go('teamcard/u/' + el.dataset.uid)));
+    return;
+  }
+  const u = state.cardUser;
+  const rows = await api(`/api/expenses?book=team&user_id=${u.id}&${rq()}`);
+  const total = rows.reduce((a, r) => a + r.amount, 0), nPh = rows.reduce((a, r) => a + r.photos.length, 0);
+  const days = {}; rows.forEach((r) => (days[r.expense_date.slice(0, 10)] ||= []).push(r));
+  const cats = {}; rows.forEach((r) => (cats[r.category] = (cats[r.category] || 0) + r.amount));
+  main.innerHTML = `<div class="crumb">${isAdmin() ? `${backBtn('teamcard')} <a id="back">부서팀장 법인카드 일지</a> / ` : ''}${userLabel(u)}</div>
+    <div class="page-head"><h1>${userLabel(u)} 법인카드 일지</h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
+    <div class="kpis"><div class="kpi"><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
+      <div class="kpi"><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
+      <div class="kpi"><div class="l">영수증 사진</div><div class="v">${nPh}장</div></div>
+      <div class="kpi"><div class="l">항목별</div><div class="note">${Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${won(v)}`).join(' · ') || '-'}</div></div></div>
+    <div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-team">+ 법인카드 사용 등록 (여러 건)</button></div>
+    ${Object.keys(days).sort().reverse().map((d) => `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
+      <span class="note">합계 <b>${won(days[d].reduce((a, r) => a + r.amount, 0))}원</b> · ${days[d].length}건</span></div>${days[d].map(expItemHtml).join('')}</div>`).join('') || '<div class="card empty">기간 내 사용 내역 없음</div>'}`;
+  $('#back')?.addEventListener('click', () => go('teamcard'));
+  $('#add-team').onclick = () => teamForm(u);
+  $$('[data-edit]', main).forEach((b) => (b.onclick = () => expenseForm(u, [], rows.find((x) => x.id == b.dataset.edit), { book: 'team', after: pageTeamCard })));
+}
+function teamForm(u) {
+  const c = openModal(`<div class="row" style="justify-content:space-between"><h2 style="margin:0">부서팀장 법인카드 사용 등록 · ${userLabel(u)}</h2><button class="btn" data-close>닫기</button></div>
+    <div class="grid3"><label>사용일자<input type="date" name="date" value="${today()}"></label></div>
+    <div class="card-col corp"><div class="col-title corp">법인카드 사용 내역</div><div class="exp-rows" data-card="corporate"></div><button class="btn sm" id="add-row">+ 사용 건 추가</button></div>
+    <div class="day-sum" id="team-sum" style="grid-template-columns:repeat(2,1fr)"></div>
+    <div class="modal-actions"><button class="btn" data-close>취소</button><button class="btn primary" id="save">저장</button></div>`, 'wide');
+  let seq = 0;
+  const box = $('.exp-rows', c);
+  const recalc = () => {
+    const t = $$('[name=amount]', box).reduce((a, x) => a + (Number(String(x.value).replace(/[^\d]/g, '')) || 0), 0);
+    $('#team-sum', c).innerHTML = `<div><span>건수</span><b>${$$('.exp-row', box).length}건</b></div><div class="hl"><span>법인카드 합계</span><b>${won(t)}원</b></div>`;
+  };
+  const addRow = () => {
+    const k = 't' + (++seq);
+    const el = document.createElement('div'); el.className = 'exp-row'; el.dataset.key = k;
+    el.innerHTML = `<div class="exp-grid"><select name="cat">${EXP_CATS.map((x) => `<option>${x}</option>`).join('')}</select>
+      <input name="etc" class="hidden" placeholder="기타 항목 입력"><input name="amount" inputmode="numeric" placeholder="금액(원)">
+      <input name="purpose" placeholder="사용 목적 (예: 팀 회의 식대)"><button class="btn sm danger" data-rm>×</button></div>
+      <label class="note">영수증 사진<input type="file" name="photos" accept="image/*,application/pdf" multiple></label><div class="photo-edit"></div>`;
+    box.appendChild(el);
+    $('[name=cat]', el).onchange = (e) => $('[name=etc]', el).classList.toggle('hidden', e.target.value !== '기타');
+    $('[name=amount]', el).oninput = recalc;
+    $('[name=photos]', el).onchange = (e) => { $('.photo-edit', el).innerHTML = [...e.target.files].map((x) => x.type.startsWith('image/') ? `<div class="ph"><img src="${URL.createObjectURL(x)}"></div>` : `<div class="note">${esc(x.name)}</div>`).join(''); };
+    $('[data-rm]', el).onclick = () => { el.remove(); recalc(); };
+    recalc();
+  };
+  $('#add-row', c).onclick = addRow;
+  addRow();
+  $('#save', c).onclick = async (ev) => {
+    const btn = ev.target;
+    const expenses = $$('.exp-row', box).map((el) => {
+      const cat = $('[name=cat]', el).value;
+      return { key: el.dataset.key, card_type: 'corporate', category: cat === '기타' ? ($('[name=etc]', el).value.trim() || '기타') : cat,
+        purpose: $('[name=purpose]', el).value, amount: $('[name=amount]', el).value };
+    });
+    const fd = new FormData();
+    fd.append('payload', JSON.stringify({ user_id: u.id, date: $('[name=date]', c).value, book: 'team', legs: [], expenses }));
+    btn.disabled = true; btn.textContent = '저장 중…';
+    try {
+      for (const el of $$('.exp-row', box)) for (const f of $('[name=photos]', el).files) fd.append('photo_' + el.dataset.key, await shrink(f));
+      const r = await api('/api/day', { method: 'POST', body: fd });
+      closeModal(); toast(`저장 완료 · ${r.expenses}건 · 사진 ${r.photos}장`); pageTeamCard();
+    } catch (e) { fail(e); btn.disabled = false; btn.textContent = '저장'; }
+  };
+}
+
+// ========== 법인카드 사용 관리 (관리자) ==========
+state.cardBook = 'all';
+async function pageCardAdmin() {
+  const main = $('#main');
+  const d = await api(`/api/card-stats?book=${state.cardBook}&${rq()}`);
+  const tot = d.users.reduce((a, u) => a + u.amount, 0), cnt = d.users.reduce((a, u) => a + u.cnt, 0);
+  const drv = d.users.reduce((a, u) => a + (u.drive_amount || 0), 0), team = d.users.reduce((a, u) => a + (u.team_amount || 0), 0);
+  const maxM = Math.max(1, ...d.monthly.map((m) => m.amount));
+  const BOOK = { all: '전체', drive: '차량운행일지 법인카드', team: '부서팀장 법인카드' };
+  main.innerHTML = `<div class="page-head"><h1>법인카드 사용 관리</h1><div class="grow"></div>${rangeControls(pageCardAdmin)}</div>
+    <div class="row" style="margin-bottom:12px">${Object.entries(BOOK).map(([k, l]) => `<button class="btn ${state.cardBook === k ? 'primary' : ''}" data-book="${k}">${l}</button>`).join('')}</div>
+    <div class="kpis"><div class="kpi"><div class="l">${BOOK[state.cardBook]} 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div><div class="note">${cnt}건</div></div>
+      <div class="kpi"><div class="l">차량운행일지 법인카드</div><div class="v">${won(drv)}원</div></div>
+      <div class="kpi"><div class="l">부서팀장 법인카드</div><div class="v">${won(team)}원</div></div></div>
+    <p class="note">차량운행일지 법인카드 수치는 통합 합계관리의 "법인카드"와 같은 기준(운행일지에 등록된 법인카드)입니다.</p>
+    <h2>직원별</h2>
+    <div class="table-wrap"><table><thead><tr><th>부서</th><th>직원</th><th>직책</th><th class="n">건수</th><th class="n">운행일지 법인카드</th><th class="n">팀장 법인카드</th><th class="n">합계</th><th class="n">영수증</th></tr></thead>
+      <tbody>${d.users.map((u) => `<tr class="clickable" data-uid="${u.id}" data-lead="${u.team_amount ? 1 : 0}"><td>${esc(u.department || '')}</td><td>${userLabel(u)}${u.active ? '' : ' <span class="badge off">퇴사</span>'}</td><td>${esc(u.position || '')}</td>
+        <td class="n">${u.cnt}</td><td class="n">${won(u.drive_amount)}</td><td class="n">${won(u.team_amount)}</td><td class="n"><b>${won(u.amount)}</b></td><td class="n">${u.photos}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">데이터 없음</td></tr>'}</tbody>
+      <tfoot><tr><td colspan="3">합계</td><td class="n">${cnt}</td><td class="n">${won(drv)}</td><td class="n">${won(team)}</td><td class="n">${won(tot)}</td><td></td></tr></tfoot></table></div>
+    <div class="grid2" style="margin-top:16px"><div class="card"><h2>항목별</h2><div class="table-wrap"><table><thead><tr><th>항목</th><th class="n">건수</th><th class="n">금액</th><th class="n">비중</th></tr></thead>
+      <tbody>${d.categories.map((x) => `<tr><td>${esc(x.category)}</td><td class="n">${x.cnt}</td><td class="n">${won(x.amount)}</td><td class="n">${tot ? Math.round((x.amount / tot) * 100) : 0}%</td></tr>`).join('') || '<tr><td colspan="4" class="empty">-</td></tr>'}</tbody></table></div></div>
+      <div class="card"><h2>월별</h2><div class="bars">${d.monthly.map((m) => `<div class="bar-row"><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원</span></div>`).join('') || '<div class="empty">-</div>'}</div></div></div>
+    <h2 style="margin-top:16px">최근 사용 내역 (최대 300건)</h2>
+    <div class="table-wrap"><table><thead><tr><th>일자</th><th>장부</th><th>직원</th><th>항목</th><th>목적</th><th class="n">금액</th><th>영수증</th></tr></thead>
+      <tbody>${d.items.map((r) => `<tr><td>${r.expense_date}</td><td><span class="badge ${r.book === 'team' ? 'pers' : 'corp'}">${r.book === 'team' ? '팀장' : '운행일지'}</span></td><td>${userLabel(r)}</td><td>${esc(r.category)}</td><td class="wrap">${esc(r.purpose || '')}</td><td class="n">${won(r.amount)}</td><td>${thumbs(r.photos)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">-</td></tr>'}</tbody></table></div>`;
+  $$('[data-book]', main).forEach((b) => (b.onclick = () => { state.cardBook = b.dataset.book; pageCardAdmin(); }));
+  $$('tr[data-uid]', main).forEach((tr) => (tr.onclick = () => {
+    if (state.cardBook === 'team' || (state.cardBook === 'all' && tr.dataset.lead === '1')) go('teamcard/u/' + tr.dataset.uid);
+    else { state.tab = 'expenses'; go('trips/u/' + tr.dataset.uid); }
+  }));
+}
+
 function photoPicker(existing) {
   return `<label>증빙 사진 (여러 장 가능, 이 건에만 연결됩니다)<input type="file" name="photos" accept="image/*,application/pdf" multiple></label>
     <div class="photo-edit" id="photo-edit">${(existing || []).map((p) => `<div class="ph" data-pid="${p.id}">${p.mime === 'application/pdf' ? '<div class="note">PDF</div>' : `<img src="/api/photos/${p.id}" data-full="/api/photos/${p.id}">`}<span class="x" title="삭제">×</span></div>`).join('')}</div>
@@ -593,30 +708,32 @@ function bindPhotoPicker(c) {
   };
 }
 
-function expenseForm(u, vehicles, rec) {
-  const r = rec || { expense_date: today(), card_type: 'corporate', category: '주유', amount: '' };
-  const c = openModal(`<h2>${rec ? '카드 사용 수정' : '카드 사용 등록'} · ${userLabel(u)}</h2>
-    <div class="row">${['corporate', 'personal'].map((t) => `<label class="inline" style="font-size:14px;color:var(--ink)"><input type="radio" name="card_type" value="${t}" style="width:auto" ${r.card_type === t ? 'checked' : ''}> ${CARD[t]}</label>`).join('')}</div>
+function expenseForm(u, vehicles, rec, opt = {}) {
+  const team = opt.book === 'team';
+  const after = opt.after || (() => { state.tab = 'expenses'; pageTrips(); });
+  const r = rec || { expense_date: today(), card_type: 'corporate', category: '식대', amount: '' };
+  const c = openModal(`<h2>${rec ? '카드 사용 수정' : '카드 사용 등록'} · ${userLabel(u)}${team ? ' · 부서팀장 법인카드' : ''}</h2>
+    <div class="row${team ? ' hidden' : ''}">${['corporate', 'personal'].map((t) => `<label class="inline" style="font-size:14px;color:var(--ink)"><input type="radio" name="card_type" value="${t}" style="width:auto" ${r.card_type === t ? 'checked' : ''}> ${CARD[t]}</label>`).join('')}</div>
     <div class="grid3"><label>사용일자<input type="date" name="expense_date" value="${String(r.expense_date).slice(0, 10)}"></label>
       <label>항목<select name="category">${(EXP_CATS.includes(r.category) ? EXP_CATS : [...EXP_CATS, r.category]).map((x) => `<option ${x === r.category ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
       <label>금액 (원)<input name="amount" inputmode="numeric" value="${r.amount}"></label></div>
     <div class="grid2"><label>사용 목적<input name="purpose" value="${esc(r.purpose || '')}"></label>
-      <label>차량<select name="vehicle_id"><option value="">-</option>${vehicles.map((v) => `<option value="${v.id}" ${v.id == r.vehicle_id ? 'selected' : ''}>${esc(v.plate)}</option>`).join('')}</select></label></div>
+      <label class="${team ? 'hidden' : ''}">차량<select name="vehicle_id"><option value="">-</option>${vehicles.map((v) => `<option value="${v.id}" ${v.id == r.vehicle_id ? 'selected' : ''}>${esc(v.plate)}</option>`).join('')}</select></label></div>
     <label>비고<input name="memo" value="${esc(r.memo || '')}"></label>
     ${photoPicker(r.photos)}
     <div class="modal-actions">${rec ? '<button class="btn danger" id="del">삭제</button><div style="flex:1"></div>' : ''}<button class="btn" data-close>취소</button><button class="btn primary" id="save">저장</button></div>`);
   bindPhotoPicker(c);
   $('#save', c).onclick = async () => {
     const fd = new FormData();
-    fd.append('user_id', u.id);
-    fd.append('card_type', $('[name=card_type]:checked', c)?.value || '');
+    fd.append('user_id', u.id); fd.append('book', team ? 'team' : 'drive');
+    fd.append('card_type', team ? 'corporate' : ($('[name=card_type]:checked', c)?.value || ''));
     ['expense_date', 'category', 'amount', 'purpose', 'vehicle_id', 'memo'].forEach((n) => fd.append(n, $(`[name=${n}]`, c).value));
     for (const f of $('[name=photos]', c).files) fd.append('photos', await shrink(f));
-    try { await api(rec ? `/api/expenses/${rec.id}` : '/api/expenses', { method: rec ? 'PUT' : 'POST', body: fd }); closeModal(); toast('저장되었습니다'); state.tab = 'expenses'; pageTrips(); } catch (e) { fail(e); }
+    try { await api(rec ? `/api/expenses/${rec.id}` : '/api/expenses', { method: rec ? 'PUT' : 'POST', body: fd }); closeModal(); toast('저장되었습니다'); after(); } catch (e) { fail(e); }
   };
   $('#del', c)?.addEventListener('click', async () => {
     if (!confirmInline(c, '이 카드 사용 내역과 사진을 삭제합니다')) return;
-    try { await api(`/api/expenses/${rec.id}`, { method: 'DELETE' }); closeModal(); pageTrips(); } catch (e) { fail(e); }
+    try { await api(`/api/expenses/${rec.id}`, { method: 'DELETE' }); closeModal(); after(); } catch (e) { fail(e); }
   });
 }
 
