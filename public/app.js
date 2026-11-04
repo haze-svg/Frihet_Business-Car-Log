@@ -8,6 +8,8 @@ const FUEL = { gasoline: '휘발유', diesel: '경유', lpg: 'LPG', hybrid: '하
 const OWN = { corporate: '법인차량', personal: '개인차량' };
 const CARD = { corporate: '법인카드', personal: '개인카드', receipt: '증빙(이관)' };
 const EXP_CATS = ['식대', '주유비', '통행료', '주차비', '매장물품구매', '숙박비', '기타'];
+// 부서팀장 법인카드: 기본 항목 + 부서회식
+const TEAM_CATS = ['식대', '부서회식', '주유비', '통행료', '주차비', '매장물품구매', '숙박비', '기타'];
 const MAINT_TYPES = ['정기점검', '엔진오일', '타이어', '소모품', '수리', '세차', '보험', '검사', '사고', '기타'];
 
 const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
@@ -629,7 +631,7 @@ function teamForm(u) {
   const addRow = () => {
     const k = 't' + (++seq);
     const el = document.createElement('div'); el.className = 'exp-row'; el.dataset.key = k;
-    el.innerHTML = `<div class="exp-grid"><select name="cat">${EXP_CATS.map((x) => `<option>${x}</option>`).join('')}</select>
+    el.innerHTML = `<div class="exp-grid"><select name="cat">${TEAM_CATS.map((x) => `<option>${x}</option>`).join('')}</select>
       <input name="etc" class="hidden" placeholder="기타 항목 입력"><input name="amount" inputmode="numeric" placeholder="금액(원)">
       <input name="purpose" placeholder="사용 목적 (예: 팀 회의 식대)"><button class="btn sm danger" data-rm>×</button></div>
       <label class="note">영수증 사진<input type="file" name="photos" accept="image/*,application/pdf" multiple></label><div class="photo-edit"></div>`;
@@ -715,7 +717,7 @@ function expenseForm(u, vehicles, rec, opt = {}) {
   const c = openModal(`<h2>${rec ? '카드 사용 수정' : '카드 사용 등록'} · ${userLabel(u)}${team ? ' · 부서팀장 법인카드' : ''}</h2>
     <div class="row${team ? ' hidden' : ''}">${['corporate', 'personal'].map((t) => `<label class="inline" style="font-size:14px;color:var(--ink)"><input type="radio" name="card_type" value="${t}" style="width:auto" ${r.card_type === t ? 'checked' : ''}> ${CARD[t]}</label>`).join('')}</div>
     <div class="grid3"><label>사용일자<input type="date" name="expense_date" value="${String(r.expense_date).slice(0, 10)}"></label>
-      <label>항목<select name="category">${(EXP_CATS.includes(r.category) ? EXP_CATS : [...EXP_CATS, r.category]).map((x) => `<option ${x === r.category ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
+      <label>항목<select name="category">${((cats) => (cats.includes(r.category) ? cats : [...cats, r.category]))(team ? TEAM_CATS : EXP_CATS).map((x) => `<option ${x === r.category ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
       <label>금액 (원)<input name="amount" inputmode="numeric" value="${r.amount}"></label></div>
     <div class="grid2"><label>사용 목적<input name="purpose" value="${esc(r.purpose || '')}"></label>
       <label class="${team ? 'hidden' : ''}">차량<select name="vehicle_id"><option value="">-</option>${vehicles.map((v) => `<option value="${v.id}" ${v.id == r.vehicle_id ? 'selected' : ''}>${esc(v.plate)}</option>`).join('')}</select></label></div>
