@@ -63,6 +63,10 @@ async function applyPatch(data, dryRun) {
          AND card_type<>'receipt' ORDER BY (SELECT count(*) FROM photos p WHERE p.owner_type='expense' AND p.owner_id=expenses.id), id LIMIT 1`,
         [u, a.date, a.amount, a.book || 'drive', a.purpose || ''])).rows[0];
       if (!r) { rep.attach_not_found.push(`${a.name} ${a.date} ${a.amount}`); continue; }
+      if (a.new_date && /^\d{4}-\d{2}-\d{2}$/.test(a.new_date)) {
+        await client.query('UPDATE expenses SET expense_date=$1, memo=$2 WHERE id=$3', [a.new_date, a.memo || '영수증 일자 반영 (원본 일자 미기재)', r.id]);
+        rep.date_fixed++;
+      }
       for (const p of a.files || []) await addPhoto(r.id, p);
       rep.attached++;
     }
