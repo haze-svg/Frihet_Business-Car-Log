@@ -54,15 +54,48 @@ async function applyPatch(data, dryRun) {
       rep.date_fixed++;
       for (const p of f.files || []) await addPhoto(r.id, p);
     }
+    // 기존 건에 영수증만 첨부 (일자 변경 없음)
+    rep.attached = 0; rep.attach_not_found = [];
+    for (const a of data.photo_attach || []) {
+      const u = uid(a.name);
+      const r = u && (await client.query(
+        `SELECT id FROM expenses WHERE user_id=$1 AND expense_date=$2 AND amount=$3 AND book=$4 AND left(COALESCE(purpose,''), length($5))=$5
+         AND card_type<>'receipt' ORDER BY (SELECT count(*) FROM photos p WHERE p.owner_type='expense' AND p.owner_id=expenses.id), id LIMIT 1`,
+        [u, a.date, a.amount, a.book || 'drive', a.purpose || ''])).rows[0];
+      if (!r) { rep.attach_not_found.push(`${a.name} ${a.date} ${a.amount}`); continue; }
+      for (const p of a.files || []) await addPhoto(r.id, p);
+      rep.attached++;
+    }
+    // 부서팀장 법인카드 내역 (같은 source로 이전에 넣은 건은 지우고 다시 적재)
+    rep.team_inserted = 0;
+    if (Array.isArray(data.team_expenses) && data.team_expenses.length) {
+      const src = data.team_source || 'gsheet-team';
+      const names = [...new Set(data.team_expenses.map((e) => e.name))];
+      for (const n of names) {
+        const u = uid(n); if (!u) { rep.not_found.push('사용자 없음: ' + n); continue; }
+        await client.query("DELETE FROM photos WHERE owner_type='expense' AND owner_id IN (SELECT id FROM expenses WHERE user_id=$1 AND book='team' AND source=$2)", [u, src]);
+        await client.query("DELETE FROM expenses WHERE user_id=$1 AND book='team' AND source=$2", [u, src]);
+      }
+      for (const e of data.team_expenses) {
+        const u = uid(e.name); if (!u) continue;
+        const r = await client.query(
+          `INSERT INTO expenses(user_id,expense_date,card_type,category,purpose,amount,memo,source,book)
+           VALUES($1,$2,'corporate',$3,$4,$5,$6,$7,'team') RETURNING id`,
+          [u, e.date, e.category || '기타', e.purpose || '', e.amount, e.memo || '', src]);
+        for (const p of e.files || []) await addPhoto(r.rows[0].id, p);
+        rep.team_inserted++;
+      }
+    }
     for (const g of data.receipt_groups || []) {
       const u = uid(g.name);
       if (!u) continue;
-      await client.query("DELETE FROM photos WHERE owner_type='expense' AND owner_id IN (SELECT id FROM expenses WHERE user_id=$1 AND expense_date=$2 AND card_type='receipt' AND source=$3)", [u, g.month + '-01', g.source || 'gsheet']);
-      await client.query("DELETE FROM expenses WHERE user_id=$1 AND expense_date=$2 AND card_type='receipt' AND source=$3", [u, g.month + '-01', g.source || 'gsheet']);
+      const gb = g.book === 'team' ? 'team' : 'drive';
+      await client.query("DELETE FROM photos WHERE owner_type='expense' AND owner_id IN (SELECT id FROM expenses WHERE user_id=$1 AND expense_date=$2 AND card_type='receipt' AND source=$3 AND book=$4)", [u, g.month + '-01', g.source || 'gsheet', gb]);
+      await client.query("DELETE FROM expenses WHERE user_id=$1 AND expense_date=$2 AND card_type='receipt' AND source=$3 AND book=$4", [u, g.month + '-01', g.source || 'gsheet', gb]);
       const r = await client.query(
-        `INSERT INTO expenses(user_id,expense_date,card_type,category,purpose,amount,memo,source)
-         VALUES($1,$2,'receipt','영수증(이관)',$3,0,$4,$5) RETURNING id`,
-        [u, g.month + '-01', `${g.month} 영수증 일괄 (${g.files.length}장)`, g.memo || '구글시트 이관 · 월 단위 첨부', g.source || 'gsheet']);
+        `INSERT INTO expenses(user_id,expense_date,card_type,category,purpose,amount,memo,source,book)
+         VALUES($1,$2,'receipt','영수증(이관)',$3,0,$4,$5,$6) RETURNING id`,
+        [u, g.month + '-01', `${g.month} 영수증 일괄 (${g.files.length}장)`, g.memo || '구글시트 이관 · 월 단위 첨부', g.source || 'gsheet', gb]);
       for (const p of g.files) await addPhoto(r.rows[0].id, p);
       rep.receipt_groups++;
     }

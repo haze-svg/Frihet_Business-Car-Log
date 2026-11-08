@@ -238,8 +238,8 @@ app.get('/api/vehicles', auth, wrap(async (req, res) => {
   const r = await q(
     `SELECT v.*, u.name AS user_name, u.nickname AS user_nickname, u.department
      FROM vehicles v LEFT JOIN users u ON u.id=v.user_id
-     ${isAdmin(req) ? '' : 'WHERE v.user_id=$1'} ORDER BY v.active DESC, u.name, v.plate`,
-    isAdmin(req) ? [] : [req.user.id]
+     ${isAdmin(req) || req.query.scope === 'all' ? '' : 'WHERE v.user_id=$1'} ORDER BY v.active DESC, u.name, v.plate`,
+    isAdmin(req) || req.query.scope === 'all' ? [] : [req.user.id]
   );
   res.json(r.rows);
 }));
@@ -343,7 +343,8 @@ async function vehicleStatus(v, rules, today) {
 app.get('/api/vehicle-status', auth, wrap(async (req, res) => {
   const rules = await maintRules();
   const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
-  const vs = (await q(`SELECT * FROM vehicles ${isAdmin(req) ? '' : 'WHERE user_id=$1'} ORDER BY id`, isAdmin(req) ? [] : [req.user.id])).rows;
+  const all = isAdmin(req) || req.query.scope === 'all';
+  const vs = (await q(`SELECT * FROM vehicles ${all ? '' : 'WHERE user_id=$1'} ORDER BY id`, all ? [] : [req.user.id])).rows;
   const want = req.query.ids ? String(req.query.ids).split(',').map(int) : null;
   const out = [];
   for (const v of vs) if (!want || want.includes(v.id)) out.push(await vehicleStatus(v, rules, today));
@@ -383,8 +384,8 @@ app.get('/api/photos/:id', auth, wrap(async (req, res) => {
   const r = await q('SELECT * FROM photos WHERE id=$1', [int(req.params.id)]);
   const p = r.rows[0];
   if (!p) throw bad('사진 없음', 404);
-  if (!isAdmin(req)) {
-    const table = p.owner_type === 'expense' ? 'expenses' : 'maintenance';
+  if (!isAdmin(req) && p.owner_type !== 'maintenance') {
+    const table = 'expenses';
     const o = await q(`SELECT user_id FROM ${table} WHERE id=$1`, [p.owner_id]);
     if (o.rows[0]?.user_id !== req.user.id) throw bad('권한 없음', 403);
   }
@@ -579,7 +580,6 @@ app.get('/api/maintenance', auth, wrap(async (req, res) => {
   const vid = int(req.query.vehicle_id);
   const v = (await q('SELECT * FROM vehicles WHERE id=$1', [vid])).rows[0];
   if (!v) throw bad('차량 없음', 404);
-  if (!isAdmin(req) && v.user_id !== req.user.id) throw bad('권한 없음', 403);
   const r = await q(
     `SELECT m.*, u.name AS user_name FROM maintenance m LEFT JOIN users u ON u.id=m.user_id
      WHERE m.vehicle_id=$1 AND m.maint_date BETWEEN $2 AND $3 ORDER BY m.maint_date DESC, m.id DESC`, [vid, from, to]
@@ -682,11 +682,11 @@ app.get('/api/team-summary', auth, wrap(async (req, res) => {
   const ids = holders.map((u) => u.id);
   if (!ids.length) return res.json({ from, to, users: [], categories: [], monthly: [] });
   const per = (await q(`SELECT user_id, category, count(*)::int cnt, sum(amount)::int amount FROM expenses
-    WHERE book='team' AND expense_date BETWEEN $1 AND $2 AND user_id = ANY($3) GROUP BY 1,2`, [from, to, ids])).rows;
+    WHERE book='team' AND card_type<>'receipt' AND expense_date BETWEEN $1 AND $2 AND user_id = ANY($3) GROUP BY 1,2`, [from, to, ids])).rows;
   const ph = (await q(`SELECT e.user_id, count(p.id)::int n FROM expenses e JOIN photos p ON p.owner_type='expense' AND p.owner_id=e.id
     WHERE e.book='team' AND e.expense_date BETWEEN $1 AND $2 AND e.user_id = ANY($3) GROUP BY 1`, [from, to, ids])).rows;
   const monthly = (await q(`SELECT to_char(expense_date,'YYYY-MM') ym, sum(amount)::int amount, count(*)::int cnt FROM expenses
-    WHERE book='team' AND expense_date BETWEEN $1 AND $2 AND user_id = ANY($3) GROUP BY 1 ORDER BY 1`, [from, to, ids])).rows;
+    WHERE book='team' AND card_type<>'receipt' AND expense_date BETWEEN $1 AND $2 AND user_id = ANY($3) GROUP BY 1 ORDER BY 1`, [from, to, ids])).rows;
   const cats = [...new Set(per.map((x) => x.category))];
   const users = holders.map((u) => {
     const rows = per.filter((x) => x.user_id === u.id);
@@ -711,7 +711,7 @@ app.get('/api/records', auth, wrap(async (req, res) => {
   const P = [from, to]; const W = [];
   const add = (sql, v) => { P.push(v); W.push(sql.replace('?', '$' + P.length)); };
   let ids = req.query.user_ids ? String(req.query.user_ids).split(',').map(int).filter(Boolean) : null;
-  if (!isAdmin(req)) ids = [req.user.id];
+  if (!isAdmin(req) && kind !== 'maintenance') ids = [req.user.id];
   if (ids && ids.length) add('x.user_id = ANY(?)', ids);
   if (req.query.scope === 'summary') W.push("COALESCE(u.position,'') NOT LIKE '%대표%'");
   if (req.query.holders === '1') W.push("((u.team_card IS NOT NULL AND u.team_card<>'') OR u.position LIKE '%팀장%')");
@@ -736,7 +736,6 @@ app.get('/api/records', auth, wrap(async (req, res) => {
     if (req.query.vehicle_id) {
       const v = (await q('SELECT * FROM vehicles WHERE id=$1', [int(req.query.vehicle_id)])).rows[0];
       if (!v) throw bad('차량 없음', 404);
-      if (!isAdmin(req) && v.user_id !== req.user.id) throw bad('권한 없음', 403);
       P.push(v.id); vw = ' AND x.vehicle_id=$' + P.length;
     }
     rows = (await q(`SELECT x.*, v.plate, u.name, u.nickname FROM maintenance x LEFT JOIN vehicles v ON v.id=x.vehicle_id LEFT JOIN users u ON u.id=x.user_id

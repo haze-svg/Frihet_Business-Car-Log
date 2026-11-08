@@ -146,8 +146,10 @@ async function render() {
       state.tripUser = isAdmin() ? (await api('/api/users?all=1')).find((u) => u.id == id) : state.me;
     }
     if (page === 'teamcard' && kind === 'u' && id) state.cardUser = (await api('/api/leads')).find((u) => u.id == id) || null;
-    if (page === 'maintenance' && kind === 'v' && id) state.vehicle = (await api('/api/vehicles')).find((v) => v.id == id) || null;
+    if (page === 'maintenance' && kind === 'v' && id) state.vehicle = (await api('/api/vehicles?scope=all')).find((v) => v.id == id) || null;
   } catch (e) { fail(e); }
+  // 관리자 전용 화면은 관리자만 (서버에서도 차단)
+  if (['staff', 'settings', 'cardadmin'].includes(page) && !isAdmin()) { location.hash = 'trips'; return; }
   ({ trips: pageTrips, maintenance: pageMaint, summary: pageSummary, staff: pageStaff, settings: pageSettings, teamcard: pageTeamCard, cardadmin: pageCardAdmin }[page] || pageTrips)();
   window.scrollTo(0, 0);
 }
@@ -212,8 +214,8 @@ function vehicleDrill(title, list, map) {
 
 // ---------- 차량 정비 상태 표시 ----------
 const LV = { overdue: ['al-red', '교체 필요'], unknown: ['al-amber', '확인 필요'], soon: ['al-orange', '임박'], ok: ['al-green', '정상'] };
-async function vehicleStatusMap(ids) {
-  try { const r = await api('/api/vehicle-status' + (ids ? '?ids=' + ids.join(',') : '')); const m = {}; r.items.forEach((x) => (m[x.vehicle_id] = x)); return { map: m, rules: r.rules }; }
+async function vehicleStatusMap(ids, all) {
+  try { const r = await api('/api/vehicle-status?scope=' + (all ? 'all' : 'mine') + (ids ? '&ids=' + ids.join(',') : '')); const m = {}; r.items.forEach((x) => (m[x.vehicle_id] = x)); return { map: m, rules: r.rules }; }
   catch { return { map: {}, rules: null }; }
 }
 function alertChips(st) {
@@ -657,7 +659,8 @@ async function pageTeamCard() {
     return;
   }
   const u = state.cardUser;
-  const rows = await api(`/api/expenses?book=team&user_id=${u.id}&${rq()}`);
+  const rows0 = await api(`/api/expenses?book=team&user_id=${u.id}&${rq()}`);
+  const rows = rows0.filter((r) => r.card_type !== 'receipt'), bundles = rows0.filter((r) => r.card_type === 'receipt');
   const total = rows.reduce((a, r) => a + r.amount, 0), nPh = rows.reduce((a, r) => a + r.photos.length, 0);
   const days = {}; rows.forEach((r) => (days[r.expense_date.slice(0, 10)] ||= []).push(r));
   const cats = {}; rows.forEach((r) => (cats[r.category] = (cats[r.category] || 0) + r.amount));
@@ -669,7 +672,8 @@ async function pageTeamCard() {
       <div class="kpi"><div class="l">항목별</div><div class="note">${Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => ddLink(`${esc(k)} ${won(v)}`, u.name + ' · ' + k, { kind: 'expenses', book: 'team', user_ids: u.id, category: k })).join(' · ') || '-'}</div></div></div>
     <div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-team">+ 법인카드 사용 등록 (여러 건)</button></div>
     ${Object.keys(days).sort().reverse().map((d) => `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
-      <span class="note">합계 <b>${won(days[d].reduce((a, r) => a + r.amount, 0))}원</b> · ${days[d].length}건</span></div>${days[d].map(expItemHtml).join('')}</div>`).join('') || '<div class="card empty">기간 내 사용 내역 없음</div>'}`;
+      <span class="note">합계 <b>${won(days[d].reduce((a, r) => a + r.amount, 0))}원</b> · ${days[d].length}건</span></div>${days[d].map(expItemHtml).join('')}</div>`).join('') || '<div class="card empty">기간 내 사용 내역 없음</div>'}
+    ${bundles.length ? `<h2 style="margin-top:18px">이관 영수증 (월별 일괄 · 건별 연결 안 된 사진)</h2>${bundles.map((r) => `<div class="card day-block"><div class="row" style="justify-content:space-between"><b>${esc(r.purpose)}</b><span class="note">${esc(r.memo || '')}</span></div>${thumbs(r.photos)}</div>`).join('')}` : ''}`;
   $('#back')?.addEventListener('click', () => go('teamcard'));
   $('#add-team').onclick = () => teamForm(u);
   $$('[data-edit]', main).forEach((b) => (b.onclick = () => expenseForm(u, [], rows.find((x) => x.id == b.dataset.edit), { book: 'team', after: pageTeamCard })));
@@ -806,9 +810,9 @@ function expenseForm(u, vehicles, rec, opt = {}) {
 // ========== 차량관리 및 점검일지 ==========
 async function pageMaint() {
   const main = $('#main');
-  const vehicles = await api('/api/vehicles');
+  const vehicles = await api('/api/vehicles?scope=all');
   if (!state.vehicle) {
-    const { map, rules } = await vehicleStatusMap();
+    const { map, rules } = await vehicleStatusMap(null, true);
     const order = { overdue: 0, unknown: 1, soon: 2, ok: 3 };
     const list = [...vehicles].sort((a, b) => (b.active - a.active) || (order[map[a.id]?.worst] ?? 9) - (order[map[b.id]?.worst] ?? 9));
     const cnt = (lv) => vehicles.filter((v) => v.active && map[v.id]?.alerts.some((a) => a.level === lv)).length;
@@ -837,7 +841,8 @@ async function pageMaint() {
     return;
   }
   const v = state.vehicle;
-  const [rows, vs1] = await Promise.all([api(`/api/maintenance?vehicle_id=${v.id}&${rq()}`), vehicleStatusMap([v.id])]);
+  const [rows, vs1] = await Promise.all([api(`/api/maintenance?vehicle_id=${v.id}&${rq()}`), vehicleStatusMap([v.id], true)]);
+  const canEdit = isAdmin() || v.user_id === state.me.id;
   const total = rows.reduce((a, r) => a + r.amount, 0);
   const lastOdo = rows.find((r) => r.odometer_km)?.odometer_km;
   main.innerHTML = `<div class="crumb">${backBtn('maintenance')} <a id="back">차량관리 및 점검일지</a> / ${esc(v.plate)}</div>
@@ -846,17 +851,17 @@ async function pageMaint() {
       <div class="kpi"><div class="l">공식연비</div><div class="v">${v.efficiency_km_l ? v.efficiency_km_l + ' km/L' : '데이터 확인 불가'}</div></div>
       <div class="kpi pick" ${dd(v.plate + ' 관리·점검 기록', { kind: 'maintenance', vehicle_id: v.id })}><div class="l">최근 주행거리</div><div class="v">${lastOdo ? won(lastOdo) + ' km' : '-'}</div></div>
       <div class="kpi pick" ${dd(v.plate + ' 관리·점검 비용', { kind: 'maintenance', vehicle_id: v.id })}><div class="l">기간 관리비용</div><div class="v">${won(total)}원</div></div></div>
-    <div class="row" style="margin-bottom:10px"><button class="btn primary" id="add">+ 관리·점검 기록</button></div>
+    ${canEdit ? '<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add">+ 관리·점검 기록</button></div>' : '<p class="note">다른 직원 차량은 열람만 가능합니다. 기록 등록·수정은 담당 직원과 관리자만 할 수 있습니다.</p>'}
     <div class="table-wrap"><table><thead><tr><th>일자</th><th>구분</th><th class="n">주행거리</th><th>내용</th><th>업체</th><th>결제</th><th class="n">금액</th><th>다음 점검</th><th>사진</th><th>작성자</th><th></th></tr></thead>
     <tbody>${rows.map((r) => `<tr><td>${r.maint_date.slice(0, 10)}</td><td>${esc(r.maint_type)}</td><td class="n">${r.odometer_km ? won(r.odometer_km) : '-'}</td>
       <td class="wrap">${esc(r.description)}</td><td>${esc(r.vendor)}</td><td>${r.card_type ? `<span class="badge ${r.card_type === 'corporate' ? 'corp' : 'pers'}">${CARD[r.card_type]}</span>` : '-'}</td>
       <td class="n">${won(r.amount)}</td><td>${r.next_due_date ? r.next_due_date.slice(0, 10) : ''}${r.next_due_km ? ' / ' + won(r.next_due_km) + 'km' : ''}</td>
-      <td>${thumbs(r.photos)}</td><td>${esc(r.user_name || '')}</td><td><button class="btn sm" data-edit="${r.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="11" class="empty">기록 없음</td></tr>'}</tbody>
+      <td>${thumbs(r.photos)}</td><td>${esc(r.user_name || '')}</td><td>${canEdit ? `<button class="btn sm" data-edit="${r.id}">수정</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="11" class="empty">기록 없음</td></tr>'}</tbody>
     <tfoot><tr><td colspan="6">합계</td><td class="n">${won(total)}</td><td colspan="4"></td></tr></tfoot></table></div>`;
   $('#back').onclick = () => go('maintenance');
   $('.kpis', main).insertAdjacentHTML('beforebegin', vehiclePanel(v, vs1.map[v.id]).replace('<button class="btn sm" data-gov="' + v.id + '">관리·점검일지 →</button>', ''));
   $('.veh-panel details', main)?.setAttribute('open', '');
-  $('#add').onclick = () => maintForm(v, null);
+  $('#add')?.addEventListener('click', () => maintForm(v, null));
   $$('[data-edit]', main).forEach((b) => (b.onclick = () => maintForm(v, rows.find((x) => x.id == b.dataset.edit))));
 }
 function maintForm(v, rec) {
