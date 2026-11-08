@@ -47,7 +47,7 @@ async function applyPatch(data, dryRun) {
     for (const f of data.date_fixes || []) {
       const u = uid(f.name);
       const r = u && (await client.query(
-        `SELECT id FROM expenses WHERE user_id=$1 AND expense_date=$2 AND amount=$3 AND left(COALESCE(purpose,''), length($4))=$4 AND memo LIKE '%미기재%' ORDER BY id LIMIT 1`,
+        `SELECT id FROM expenses WHERE user_id=$1 AND expense_date=$2 AND amount=$3 AND left(COALESCE(purpose,''), length($4))=$4 AND memo LIKE '%미기재%' AND memo NOT LIKE '%반영%' ORDER BY id LIMIT 1`,
         [u, f.cur_date, f.amount, f.purpose || ''])).rows[0];
       if (!r) { rep.not_found.push(`${f.name} ${f.cur_date} ${f.amount}`); continue; }
       await client.query('UPDATE expenses SET expense_date=$1, memo=$2 WHERE id=$3', [f.new_date, f.memo || '영수증 일자 반영 (원본 일자 미기재)', r.id]);

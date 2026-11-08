@@ -697,6 +697,56 @@ app.get('/api/team-summary', auth, wrap(async (req, res) => {
   res.json({ from, to, users, categories: cats, monthly });
 }));
 
+// ---------- 대시보드 숫자 상세 (드릴다운) ----------
+// kind=trips|expenses|maintenance, 공통: from,to,user_ids,ym(YYYY-MM)
+// expenses: book=drive|team|all, card_type, category(쉼표), has_photo=1 / maintenance: vehicle_id / scope=summary(대표 제외), holders=1(법인카드 일지 사용자)
+app.get('/api/records', auth, wrap(async (req, res) => {
+  let { from, to } = period(req);
+  if (/^\d{4}-\d{2}$/.test(String(req.query.ym || ''))) {
+    const [y, m] = req.query.ym.split('-').map(Number);
+    const s = `${req.query.ym}-01`, e = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    if (s > from) from = s; if (e < to) to = e;
+  }
+  const kind = ['trips', 'expenses', 'maintenance'].includes(req.query.kind) ? req.query.kind : 'trips';
+  const P = [from, to]; const W = [];
+  const add = (sql, v) => { P.push(v); W.push(sql.replace('?', '$' + P.length)); };
+  let ids = req.query.user_ids ? String(req.query.user_ids).split(',').map(int).filter(Boolean) : null;
+  if (!isAdmin(req)) ids = [req.user.id];
+  if (ids && ids.length) add('x.user_id = ANY(?)', ids);
+  if (req.query.scope === 'summary') W.push("COALESCE(u.position,'') NOT LIKE '%대표%'");
+  if (req.query.holders === '1') W.push("((u.team_card IS NOT NULL AND u.team_card<>'') OR u.position LIKE '%팀장%')");
+  const where = W.length ? ' AND ' + W.join(' AND ') : '';
+  let rows, ownerType = null;
+  if (kind === 'trips') {
+    rows = (await q(`SELECT x.*, v.plate, u.name, u.nickname FROM trips x LEFT JOIN vehicles v ON v.id=x.vehicle_id JOIN users u ON u.id=x.user_id
+      WHERE x.trip_date BETWEEN $1 AND $2 ${where} ORDER BY x.trip_date DESC, x.id DESC LIMIT 3000`, P)).rows;
+  } else if (kind === 'expenses') {
+    const W2 = [];
+    const book = ['drive', 'team'].includes(req.query.book) ? req.query.book : req.query.book === 'all' ? null : 'drive';
+    if (book) { P.push(book); W2.push('x.book=$' + P.length); }
+    if (['corporate', 'personal', 'receipt'].includes(req.query.card_type)) { P.push(req.query.card_type); W2.push('x.card_type=$' + P.length); }
+    else W2.push("x.card_type<>'receipt'");
+    if (req.query.category) { P.push(String(req.query.category).split(',')); W2.push('x.category = ANY($' + P.length + ')'); }
+    if (req.query.has_photo === '1') W2.push("EXISTS (SELECT 1 FROM photos p WHERE p.owner_type='expense' AND p.owner_id=x.id)");
+    rows = (await q(`SELECT x.*, v.plate, u.name, u.nickname FROM expenses x LEFT JOIN vehicles v ON v.id=x.vehicle_id JOIN users u ON u.id=x.user_id
+      WHERE x.expense_date BETWEEN $1 AND $2 ${where} ${W2.length ? 'AND ' + W2.join(' AND ') : ''} ORDER BY x.expense_date DESC, x.id DESC LIMIT 3000`, P)).rows;
+    ownerType = 'expense';
+  } else {
+    let vw = '';
+    if (req.query.vehicle_id) {
+      const v = (await q('SELECT * FROM vehicles WHERE id=$1', [int(req.query.vehicle_id)])).rows[0];
+      if (!v) throw bad('차량 없음', 404);
+      if (!isAdmin(req) && v.user_id !== req.user.id) throw bad('권한 없음', 403);
+      P.push(v.id); vw = ' AND x.vehicle_id=$' + P.length;
+    }
+    rows = (await q(`SELECT x.*, v.plate, u.name, u.nickname FROM maintenance x LEFT JOIN vehicles v ON v.id=x.vehicle_id LEFT JOIN users u ON u.id=x.user_id
+      WHERE x.maint_date BETWEEN $1 AND $2 ${where.replace("COALESCE(u.position,'')", "COALESCE(u.position,'')")} ${vw} ORDER BY x.maint_date DESC, x.id DESC LIMIT 3000`, P)).rows;
+    ownerType = 'maintenance';
+  }
+  if (ownerType) { const ph = await photoList(ownerType, rows.map((x) => x.id)); rows = rows.map((x) => ({ ...x, photos: ph[x.id] || [] })); }
+  res.json({ kind, from, to, rows });
+}));
+
 // ---------- 설정 (관리자) ----------
 const SETTING_KEYS = ['kakao_rest_key', 'kakao_js_key', 'opinet_key', 'price_gasoline', 'price_diesel', 'price_lpg', 'price_ev', 'rule_oil_km', 'rule_oil_months', 'rule_tire_km', 'rule_tire_months', 'rule_due_soon_pct'];
 const SECRET_KEYS = ['kakao_rest_key', 'opinet_key'];

@@ -154,6 +154,62 @@ async function render() {
 const backBtn = (fallback) => `<button class="btn sm back-btn" data-back="${fallback}">← 뒤로</button>`;
 document.addEventListener('click', (e) => { const b = e.target.closest('[data-back]'); if (b) back(b.dataset.back); });
 
+// ---------- 숫자 상세 보기 (드릴다운) ----------
+// dd(title, query) → 클릭 가능한 속성. query: kind, user_ids, book, card_type, category, has_photo, ym, vehicle_id, scope, holders, sum
+const dd = (title, qo) => `data-drill="${esc(JSON.stringify({ title, q: qo }))}" title="눌러서 상세 보기"`;
+const ddLink = (v, title, qo) => `<span class="dl" ${dd(title, qo)}>${v}</span>`;
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-drill]'); if (!el) return;
+  e.stopPropagation(); e.preventDefault();
+  const d = JSON.parse(el.dataset.drill); openDrill(d.title, d.q);
+}, true);
+const SUMK = { trip_count: null, distance_km: 'distance_km', fuel_cost_won: 'fuel_cost_won', toll_won: 'toll_won', parking_won: 'parking_won', operating_cost_won: 'op' };
+async function openDrill(title, qo) {
+  const c = openModal(`<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(title)}</h2><button class="btn" data-close>닫기</button></div><div class="note">불러오는 중…</div>`, 'full');
+  try {
+    const params = new URLSearchParams({ from: qo.from || state.range.from, to: qo.to || state.range.to });
+    Object.entries(qo).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '' && !['sum', 'from', 'to'].includes(k)) params.set(k, Array.isArray(v) ? v.join(',') : v); });
+    const d = await api('/api/records?' + params);
+    const R = d.rows; const n = R.length;
+    let head, body, foot;
+    const who = (r) => `${esc(r.name || '')}${r.nickname ? `(${esc(r.nickname)})` : ''}`;
+    if (d.kind === 'trips') {
+      const op = (r) => r.fuel_cost_won + r.toll_won + r.parking_won;
+      const S = (f) => R.reduce((a, r) => a + Number(f(r)), 0);
+      head = '<th>일자</th><th>직원</th><th>차량</th><th>목적</th><th>출발 → 도착</th><th class="n">km</th><th class="n">연료비</th><th class="n">통행료</th><th class="n">주차비</th><th class="n">운행비</th>';
+      body = R.map((r) => `<tr><td>${r.trip_date.slice(0, 10)}</td><td>${who(r)}</td><td>${esc(r.plate || '')}</td><td class="wrap">${esc(r.purpose || '')}</td><td class="wrap">${esc(r.start_name || '')} → ${esc(r.end_name || '')}${r.round_trip ? ' (왕복)' : ''}</td>
+        <td class="n">${km(r.distance_km)}</td><td class="n">${won(r.fuel_cost_won)}</td><td class="n">${won(r.toll_won)}</td><td class="n">${won(r.parking_won)}</td><td class="n"><b>${won(op(r))}</b></td></tr>`).join('');
+      foot = `<td colspan="5">합계 ${n}건</td><td class="n">${km(S((r) => r.distance_km))}</td><td class="n">${won(S((r) => r.fuel_cost_won))}</td><td class="n">${won(S((r) => r.toll_won))}</td><td class="n">${won(S((r) => r.parking_won))}</td><td class="n">${won(S(op))}</td>`;
+    } else if (d.kind === 'expenses') {
+      const tot = R.reduce((a, r) => a + r.amount, 0), ph = R.reduce((a, r) => a + r.photos.length, 0);
+      head = '<th>일자</th><th>직원</th><th>장부</th><th>카드</th><th>항목</th><th>목적</th><th class="n">금액</th><th>영수증</th>';
+      body = R.map((r) => `<tr><td>${r.expense_date.slice(0, 10)}</td><td>${who(r)}</td><td>${r.book === 'team' ? '팀장카드' : '운행일지'}</td>
+        <td><span class="badge ${r.card_type === 'personal' ? 'pers' : 'corp'}">${CARD[r.card_type]}</span></td><td>${esc(r.category)}</td><td class="wrap">${esc(r.purpose || '')}${r.memo ? `<div class="note">${esc(r.memo)}</div>` : ''}</td>
+        <td class="n"><b>${won(r.amount)}</b></td><td>${thumbs(r.photos)}</td></tr>`).join('');
+      foot = `<td colspan="6">합계 ${n}건 · 영수증 ${ph}장</td><td class="n">${won(tot)}</td><td></td>`;
+    } else {
+      const tot = R.reduce((a, r) => a + r.amount, 0);
+      head = '<th>일자</th><th>차량</th><th>직원</th><th>구분</th><th class="n">주행거리</th><th>내용</th><th>업체</th><th class="n">금액</th><th>사진</th>';
+      body = R.map((r) => `<tr><td>${r.maint_date.slice(0, 10)}</td><td>${esc(r.plate || '')}</td><td>${who(r)}</td><td>${esc(r.maint_type)}</td><td class="n">${r.odometer_km ? won(r.odometer_km) : '-'}</td>
+        <td class="wrap">${esc(r.description || '')}</td><td>${esc(r.vendor || '')}</td><td class="n"><b>${won(r.amount)}</b></td><td>${thumbs(r.photos)}</td></tr>`).join('');
+      foot = `<td colspan="7">합계 ${n}건</td><td class="n">${won(tot)}</td><td></td>`;
+    }
+    c.innerHTML = `<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(title)}</h2><button class="btn" data-close>닫기</button></div>
+      <p class="note">기간 ${d.from} ~ ${d.to} · ${n}건${n >= 3000 ? ' (최대 3,000건까지 표시)' : ''}</p>
+      <div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body || `<tr><td colspan="10" class="empty">해당 기록 없음</td></tr>`}</tbody>${n ? `<tfoot><tr>${foot}</tr></tfoot>` : ''}</table></div>`;
+    $$('[data-close]', c).forEach((b) => (b.onclick = closeModal));
+  } catch (e) { closeModal(); fail(e); }
+}
+function vehicleDrill(title, list, map) {
+  const c = openModal(`<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(title)} · ${list.length}대</h2><button class="btn" data-close>닫기</button></div>
+    <div class="table-wrap"><table><thead><tr><th>차량</th><th>구분</th><th>담당자</th><th class="n">추정 주행거리</th><th>최근 정비</th><th>상태·사유</th></tr></thead><tbody>
+    ${list.map((v) => `<tr class="clickable" data-vgo="${v.id}"><td><b>${esc(v.plate)}</b></td><td>${OWN[v.ownership]}</td><td>${esc(v.user_name || '-')}</td>
+      <td class="n">${map[v.id]?.est_odometer != null ? won(map[v.id].est_odometer) + 'km' : '확인 불가'}</td><td>${map[v.id]?.recent ? map[v.id].recent.maint_date + ' ' + esc(map[v.id].recent.maint_type) : '없음'}</td>
+      <td class="wrap">${(map[v.id]?.alerts || []).map((a) => `<div><span class="al ${LV[a.level][0]}">${esc(a.title)}</span> ${esc(a.reason)}</div>`).join('') || '-'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">해당 차량 없음</td></tr>'}
+    </tbody></table></div><p class="note">행을 누르면 해당 차량 관리·점검일지로 이동합니다.</p>`, 'full');
+  $$('[data-vgo]', c).forEach((tr) => (tr.onclick = () => { closeModal(); go('maintenance/v/' + tr.dataset.vgo); }));
+}
+
 // ---------- 차량 정비 상태 표시 ----------
 const LV = { overdue: ['al-red', '교체 필요'], unknown: ['al-amber', '확인 필요'], soon: ['al-orange', '임박'], ok: ['al-green', '정상'] };
 async function vehicleStatusMap(ids) {
@@ -220,11 +276,11 @@ async function pageTrips() {
       <a class="btn" href="/api/export?${qs}">엑셀 다운로드</a></div>
     <div class="veh-panels">${myVehicles.map((v) => vehiclePanel(v, vst.map[v.id])).join('') || '<div class="card note">등록된 사용 차량이 없습니다.</div>'}</div>
     <div class="kpis">
-      <div class="kpi"><div class="l">운행 횟수</div><div class="v">${trips.length}회</div></div>
-      <div class="kpi"><div class="l">운행 거리</div><div class="v">${km(t.km)} km</div></div>
-      <div class="kpi"><div class="l">연료비(공식연비 기준)</div><div class="v">${won(t.fuel)}원</div></div>
-      <div class="kpi"><div class="l">통행료</div><div class="v">${won(t.toll)}원</div></div>
-      <div class="kpi"><div class="l">운행비 합계</div><div class="v">${won(t.fuel + t.toll + t.park)}원</div></div>
+      <div class="kpi pick" ${dd(u.name + ' 운행 기록', { kind: 'trips', user_ids: u.id })}><div class="l">운행 횟수</div><div class="v">${trips.length}회</div></div>
+      <div class="kpi pick" ${dd(u.name + ' 운행 거리', { kind: 'trips', user_ids: u.id })}><div class="l">운행 거리</div><div class="v">${km(t.km)} km</div></div>
+      <div class="kpi pick" ${dd(u.name + ' 연료비', { kind: 'trips', user_ids: u.id })}><div class="l">연료비(공식연비 기준)</div><div class="v">${won(t.fuel)}원</div></div>
+      <div class="kpi pick" ${dd(u.name + ' 통행료', { kind: 'trips', user_ids: u.id })}><div class="l">통행료</div><div class="v">${won(t.toll)}원</div></div>
+      <div class="kpi pick" ${dd(u.name + ' 운행비', { kind: 'trips', user_ids: u.id })}><div class="l">운행비 합계</div><div class="v">${won(t.fuel + t.toll + t.park)}원</div></div>
       <div class="kpi pick" id="kpi-card" title="카드 사용 상세 보기"><div class="l">법인카드 / 개인카드 ›</div><div class="v">${won(e.corporate)} / ${won(e.personal)}</div></div>
     </div>
     <div class="tabs"><a data-tab="trips">운행 기록 (${trips.length})</a><a data-tab="expenses">카드 사용 (${exps.length})</a></div>
@@ -264,10 +320,10 @@ async function pageTrips() {
       body.innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-exp">+ 카드 사용 단건 등록</button>
           <button class="btn" id="add-day2">+ 하루 일괄 입력</button></div>
         <div class="kpis">
-          <div class="kpi"><div class="l">법인카드 합계</div><div class="v" style="color:var(--corp)">${won(e.corporate)}원</div><div class="note">${real.filter((r) => r.card_type === 'corporate').length}건</div></div>
-          <div class="kpi"><div class="l">개인카드 합계</div><div class="v" style="color:var(--pers)">${won(e.personal)}원</div><div class="note">${real.filter((r) => r.card_type === 'personal').length}건</div></div>
-          <div class="kpi"><div class="l">총 합계</div><div class="v">${won(e.corporate + e.personal)}원</div></div>
-          <div class="kpi"><div class="l">영수증 사진</div><div class="v">${nPhotos}장</div></div></div>
+          <div class="kpi pick" ${dd(u.name + ' 법인카드', { kind: 'expenses', user_ids: u.id, card_type: 'corporate' })}><div class="l">법인카드 합계</div><div class="v" style="color:var(--corp)">${won(e.corporate)}원</div><div class="note">${real.filter((r) => r.card_type === 'corporate').length}건</div></div>
+          <div class="kpi pick" ${dd(u.name + ' 개인카드', { kind: 'expenses', user_ids: u.id, card_type: 'personal' })}><div class="l">개인카드 합계</div><div class="v" style="color:var(--pers)">${won(e.personal)}원</div><div class="note">${real.filter((r) => r.card_type === 'personal').length}건</div></div>
+          <div class="kpi pick" ${dd(u.name + ' 카드 사용 전체', { kind: 'expenses', user_ids: u.id })}><div class="l">총 합계</div><div class="v">${won(e.corporate + e.personal)}원</div></div>
+          <div class="kpi pick" ${dd(u.name + ' 영수증 있는 카드 사용', { kind: 'expenses', user_ids: u.id, has_photo: 1 })}><div class="l">영수증 사진</div><div class="v">${nPhotos}장</div></div></div>
         ${Object.keys(days).sort().reverse().map((d) => { const D = days[d]; const sc = D.corporate.reduce((a, r) => a + r.amount, 0), sp = D.personal.reduce((a, r) => a + r.amount, 0);
           return `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
             <span class="note">법인 <b style="color:var(--corp)">${won(sc)}</b> · 개인 <b style="color:var(--pers)">${won(sp)}</b> · 합계 <b>${won(sc + sp)}원</b></span></div>
@@ -607,10 +663,10 @@ async function pageTeamCard() {
   const cats = {}; rows.forEach((r) => (cats[r.category] = (cats[r.category] || 0) + r.amount));
   main.innerHTML = `<div class="crumb">${isAdmin() ? `${backBtn('teamcard')} <a id="back">부서팀장 법인카드 일지</a> / ` : ''}${userLabel(u)}</div>
     <div class="page-head"><h1>${userLabel(u)} 법인카드 일지 <span class="badge corp">${esc(u.card_label)}</span></h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
-    <div class="kpis"><div class="kpi"><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
-      <div class="kpi"><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
-      <div class="kpi"><div class="l">영수증 사진</div><div class="v">${nPh}장</div></div>
-      <div class="kpi"><div class="l">항목별</div><div class="note">${Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${esc(k)} ${won(v)}`).join(' · ') || '-'}</div></div></div>
+    <div class="kpis"><div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
+      <div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
+      <div class="kpi pick" ${dd(u.name + ' 영수증 있는 사용', { kind: 'expenses', book: 'team', user_ids: u.id, has_photo: 1 })}><div class="l">영수증 사진</div><div class="v">${nPh}장</div></div>
+      <div class="kpi"><div class="l">항목별</div><div class="note">${Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => ddLink(`${esc(k)} ${won(v)}`, u.name + ' · ' + k, { kind: 'expenses', book: 'team', user_ids: u.id, category: k })).join(' · ') || '-'}</div></div></div>
     <div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-team">+ 법인카드 사용 등록 (여러 건)</button></div>
     ${Object.keys(days).sort().reverse().map((d) => `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
       <span class="note">합계 <b>${won(days[d].reduce((a, r) => a + r.amount, 0))}원</b> · ${days[d].length}건</span></div>${days[d].map(expItemHtml).join('')}</div>`).join('') || '<div class="card empty">기간 내 사용 내역 없음</div>'}`;
@@ -675,18 +731,18 @@ async function pageCardAdmin() {
   const BOOK = { all: '전체', drive: '차량운행일지 법인카드', team: '부서팀장 법인카드' };
   main.innerHTML = `<div class="page-head"><h1>법인카드 사용 관리</h1><div class="grow"></div>${rangeControls(pageCardAdmin)}</div>
     <div class="row" style="margin-bottom:12px">${Object.entries(BOOK).map(([k, l]) => `<button class="btn ${state.cardBook === k ? 'primary' : ''}" data-book="${k}">${l}</button>`).join('')}</div>
-    <div class="kpis"><div class="kpi"><div class="l">${BOOK[state.cardBook]} 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div><div class="note">${cnt}건</div></div>
-      <div class="kpi"><div class="l">차량운행일지 법인카드</div><div class="v">${won(drv)}원</div></div>
-      <div class="kpi"><div class="l">부서팀장 법인카드</div><div class="v">${won(team)}원</div></div></div>
+    <div class="kpis"><div class="kpi pick" ${dd(BOOK[state.cardBook] + ' 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}><div class="l">${BOOK[state.cardBook]} 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div><div class="note">${cnt}건</div></div>
+      <div class="kpi pick" ${dd('차량운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive' })}><div class="l">차량운행일지 법인카드</div><div class="v">${won(drv)}원</div></div>
+      <div class="kpi pick" ${dd('부서팀장 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team' })}><div class="l">부서팀장 법인카드</div><div class="v">${won(team)}원</div></div></div>
     <p class="note">차량운행일지 법인카드 수치는 통합 합계관리의 "법인카드"와 같은 기준(운행일지에 등록된 법인카드)입니다.</p>
     <h2>직원별</h2>
     <div class="table-wrap"><table><thead><tr><th>부서</th><th>직원</th><th>직책</th><th class="n">건수</th><th class="n">운행일지 법인카드</th><th class="n">팀장 법인카드</th><th class="n">합계</th><th class="n">영수증</th></tr></thead>
       <tbody>${d.users.map((u) => `<tr class="clickable" data-uid="${u.id}" data-lead="${u.team_amount ? 1 : 0}"><td>${esc(u.department || '')}</td><td>${userLabel(u)}${u.active ? '' : ' <span class="badge off">퇴사</span>'}</td><td>${esc(u.position || '')}</td>
-        <td class="n">${u.cnt}</td><td class="n">${won(u.drive_amount)}</td><td class="n">${won(u.team_amount)}</td><td class="n"><b>${won(u.amount)}</b></td><td class="n">${u.photos}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">데이터 없음</td></tr>'}</tbody>
-      <tfoot><tr><td colspan="3">합계</td><td class="n">${cnt}</td><td class="n">${won(drv)}</td><td class="n">${won(team)}</td><td class="n">${won(tot)}</td><td></td></tr></tfoot></table></div>
+        <td class="n">${ddLink(u.cnt, u.name + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id })}</td><td class="n">${ddLink(won(u.drive_amount), u.name + ' 운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive', user_ids: u.id })}</td><td class="n">${ddLink(won(u.team_amount), u.name + ' 팀장 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team', user_ids: u.id })}</td><td class="n"><b>${ddLink(won(u.amount), u.name + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id })}</b></td><td class="n">${ddLink(u.photos, u.name + ' 영수증 있는 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id, has_photo: 1 })}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">데이터 없음</td></tr>'}</tbody>
+      <tfoot><tr><td colspan="3">합계</td><td class="n">${ddLink(cnt, '법인카드 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}</td><td class="n">${ddLink(won(drv), '차량운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive' })}</td><td class="n">${ddLink(won(team), '부서팀장 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team' })}</td><td class="n">${ddLink(won(tot), '법인카드 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}</td><td></td></tr></tfoot></table></div>
     <div class="grid2" style="margin-top:16px"><div class="card"><h2>항목별</h2><div class="table-wrap"><table><thead><tr><th>항목</th><th class="n">건수</th><th class="n">금액</th><th class="n">비중</th></tr></thead>
-      <tbody>${d.categories.map((x) => `<tr><td>${esc(x.category)}</td><td class="n">${x.cnt}</td><td class="n">${won(x.amount)}</td><td class="n">${tot ? Math.round((x.amount / tot) * 100) : 0}%</td></tr>`).join('') || '<tr><td colspan="4" class="empty">-</td></tr>'}</tbody></table></div></div>
-      <div class="card"><h2>월별</h2><div class="bars">${d.monthly.map((m) => `<div class="bar-row"><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원</span></div>`).join('') || '<div class="empty">-</div>'}</div></div></div>
+      <tbody>${d.categories.map((x) => `<tr class="clickable" ${dd('법인카드 · ' + x.category, { kind: 'expenses', card_type: 'corporate', book: state.cardBook, category: x.category })}><td>${esc(x.category)}</td><td class="n">${x.cnt}</td><td class="n">${won(x.amount)}</td><td class="n">${tot ? Math.round((x.amount / tot) * 100) : 0}%</td></tr>`).join('') || '<tr><td colspan="4" class="empty">-</td></tr>'}</tbody></table></div></div>
+      <div class="card"><h2>월별</h2><div class="bars">${d.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원</span></div>`).join('') || '<div class="empty">-</div>'}</div></div></div>
     <h2 style="margin-top:16px">최근 사용 내역 (최대 300건)</h2>
     <div class="table-wrap"><table><thead><tr><th>일자</th><th>장부</th><th>직원</th><th>항목</th><th>목적</th><th class="n">금액</th><th>영수증</th></tr></thead>
       <tbody>${d.items.map((r) => `<tr><td>${r.expense_date}</td><td><span class="badge ${r.book === 'team' ? 'pers' : 'corp'}">${r.book === 'team' ? '팀장' : '운행일지'}</span></td><td>${userLabel(r)}</td><td>${esc(r.category)}</td><td class="wrap">${esc(r.purpose || '')}</td><td class="n">${won(r.amount)}</td><td>${thumbs(r.photos)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">-</td></tr>'}</tbody></table></div>`;
@@ -751,10 +807,10 @@ async function pageMaint() {
     const list = [...vehicles].sort((a, b) => (b.active - a.active) || (order[map[a.id]?.worst] ?? 9) - (order[map[b.id]?.worst] ?? 9));
     const cnt = (lv) => vehicles.filter((v) => v.active && map[v.id]?.alerts.some((a) => a.level === lv)).length;
     main.innerHTML = `<div class="page-head"><h1>차량관리 및 점검일지</h1></div>
-      <div class="kpis"><div class="kpi"><div class="l">교체 필요 차량</div><div class="v" style="color:#b23b3b">${cnt('overdue')}대</div></div>
-        <div class="kpi"><div class="l">이력 확인 필요</div><div class="v" style="color:#a86b00">${cnt('unknown')}대</div></div>
-        <div class="kpi"><div class="l">교체 임박</div><div class="v" style="color:#c26a1b">${cnt('soon')}대</div></div>
-        <div class="kpi"><div class="l">사용 차량</div><div class="v">${vehicles.filter((v) => v.active).length}대</div></div></div>
+      <div class="kpis"><div class="kpi pick" data-vlv="overdue"><div class="l">교체 필요 차량</div><div class="v" style="color:#b23b3b">${cnt('overdue')}대</div></div>
+        <div class="kpi pick" data-vlv="unknown"><div class="l">이력 확인 필요</div><div class="v" style="color:#a86b00">${cnt('unknown')}대</div></div>
+        <div class="kpi pick" data-vlv="soon"><div class="l">교체 임박</div><div class="v" style="color:#c26a1b">${cnt('soon')}대</div></div>
+        <div class="kpi pick" data-vlv="active"><div class="l">사용 차량</div><div class="v">${vehicles.filter((v) => v.active).length}대</div></div></div>
       ${rules ? `<p class="note">알림 기준: 엔진오일 ${won(rules.oil_km)}km 또는 ${rules.oil_months}개월 · 타이어 ${won(rules.tire_km)}km${rules.tire_months ? ' 또는 ' + rules.tire_months + '개월' : ''} · ${rules.due_soon_pct}% 도달 시 임박 (회사 운영 기준, 설정에서 변경)</p>` : ''}
       <div class="veh-board">${list.map((v) => `<div class="card pick veh-card lv-${map[v.id]?.worst || 'ok'}" data-vid="${v.id}">
         <div class="row" style="justify-content:space-between"><div><b style="font-size:17px">${esc(v.plate)}</b> ${v.active ? '' : '<span class="badge off">미사용</span>'}</div>
@@ -765,6 +821,13 @@ async function pageMaint() {
         ${map[v.id] ? `<div class="al-why">${map[v.id].alerts.filter((a) => a.level !== 'ok').map((a) => `<div>· <b>${esc(a.title)}</b>: ${esc(a.reason)}</div>`).join('')}</div>` : ''}
       </div>`).join('') || '<div class="empty">등록된 차량이 없습니다</div>'}</div>`;
     $$('[data-vid]', main).forEach((el) => (el.onclick = () => go('maintenance/v/' + el.dataset.vid)));
+    const LVT = { overdue: '교체 필요 차량', unknown: '이력 확인 필요 차량', soon: '교체 임박 차량', active: '사용 차량' };
+    $$('[data-vlv]', main).forEach((el) => (el.onclick = () => {
+      const lv = el.dataset.vlv;
+      const list = list0().filter((v) => v.active && (lv === 'active' || map[v.id]?.alerts.some((a) => a.level === lv)));
+      vehicleDrill(LVT[lv], list, map);
+    }));
+    function list0() { return list; }
     return;
   }
   const v = state.vehicle;
@@ -775,8 +838,8 @@ async function pageMaint() {
     <div class="page-head"><h1>${esc(v.plate)} <span class="badge ${v.ownership === 'corporate' ? 'corp' : 'pers'}">${OWN[v.ownership]}</span></h1><div class="grow"></div>${rangeControls(pageMaint)}</div>
     <div class="kpis"><div class="kpi"><div class="l">차종 / 유종</div><div class="v" style="font-size:15px">${esc(v.model || '-')} / ${FUEL[v.fuel_type]}</div></div>
       <div class="kpi"><div class="l">공식연비</div><div class="v">${v.efficiency_km_l ? v.efficiency_km_l + ' km/L' : '데이터 확인 불가'}</div></div>
-      <div class="kpi"><div class="l">최근 주행거리</div><div class="v">${lastOdo ? won(lastOdo) + ' km' : '-'}</div></div>
-      <div class="kpi"><div class="l">기간 관리비용</div><div class="v">${won(total)}원</div></div></div>
+      <div class="kpi pick" ${dd(v.plate + ' 관리·점검 기록', { kind: 'maintenance', vehicle_id: v.id })}><div class="l">최근 주행거리</div><div class="v">${lastOdo ? won(lastOdo) + ' km' : '-'}</div></div>
+      <div class="kpi pick" ${dd(v.plate + ' 관리·점검 비용', { kind: 'maintenance', vehicle_id: v.id })}><div class="l">기간 관리비용</div><div class="v">${won(total)}원</div></div></div>
     <div class="row" style="margin-bottom:10px"><button class="btn primary" id="add">+ 관리·점검 기록</button></div>
     <div class="table-wrap"><table><thead><tr><th>일자</th><th>구분</th><th class="n">주행거리</th><th>내용</th><th>업체</th><th>결제</th><th class="n">금액</th><th>다음 점검</th><th>사진</th><th>작성자</th><th></th></tr></thead>
     <tbody>${rows.map((r) => `<tr><td>${r.maint_date.slice(0, 10)}</td><td>${esc(r.maint_type)}</td><td class="n">${r.odometer_km ? won(r.odometer_km) : '-'}</td>
@@ -833,18 +896,18 @@ async function pageTeamSummary() {
   const cats = [...TEAM_CATS.filter((c) => d.categories.includes(c)), ...d.categories.filter((c) => !TEAM_CATS.includes(c))];
   const maxM = Math.max(1, ...d.monthly.map((m) => m.amount));
   main.innerHTML = `<div class="page-head">${summaryTabs()}<div class="grow"></div>${rangeControls(pageSummary)}</div>
-    <div class="kpis"><div class="kpi"><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div></div>
-      <div class="kpi"><div class="l">사용 건수</div><div class="v">${cnt}건</div></div>
-      <div class="kpi"><div class="l">부서회식</div><div class="v">${won(d.users.reduce((a, u) => a + (u.by['부서회식'] || 0), 0))}원</div></div>
-      <div class="kpi"><div class="l">영수증 사진</div><div class="v">${d.users.reduce((a, u) => a + u.photos, 0)}장</div></div></div>
+    <div class="kpis"><div class="kpi pick" ${dd('부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div></div>
+      <div class="kpi pick" ${dd('부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}><div class="l">사용 건수</div><div class="v">${cnt}건</div></div>
+      <div class="kpi pick" ${dd('부서회식', { kind: 'expenses', book: 'team', holders: 1, category: '부서회식' })}><div class="l">부서회식</div><div class="v">${won(d.users.reduce((a, u) => a + (u.by['부서회식'] || 0), 0))}원</div></div>
+      <div class="kpi pick" ${dd('영수증 있는 법인카드 사용', { kind: 'expenses', book: 'team', holders: 1, has_photo: 1 })}><div class="l">영수증 사진</div><div class="v">${d.users.reduce((a, u) => a + u.photos, 0)}장</div></div></div>
     <h2>사용자별 비교</h2>
     <div class="table-wrap"><table><thead><tr><th>부서</th><th>사용자</th><th>구분</th><th class="n">건수</th>${cats.map((c) => `<th class="n">${esc(c)}</th>`).join('')}<th class="n">합계</th><th class="n">영수증</th></tr></thead>
-      <tbody>${d.users.map((u) => `<tr class="clickable" data-uid="${u.id}"><td>${esc(u.department || '')}</td><td>${userLabel(u)}</td><td><span class="badge corp">${esc(u.card_label)}</span></td><td class="n">${u.cnt}</td>
-        ${cats.map((c) => `<td class="n">${won(u.by[c] || 0)}</td>`).join('')}<td class="n"><b>${won(u.amount)}</b></td><td class="n">${u.photos}</td></tr>`).join('') || `<tr><td colspan="${cats.length + 6}" class="empty">데이터 없음</td></tr>`}</tbody>
-      <tfoot><tr><td colspan="3">합계</td><td class="n">${cnt}</td>${cats.map((c) => `<td class="n">${won(d.users.reduce((a, u) => a + (u.by[c] || 0), 0))}</td>`).join('')}<td class="n">${won(tot)}</td><td></td></tr></tfoot></table></div>
-    <p class="note">행을 누르면 해당 사용자의 법인카드 일지로 이동합니다.</p>
+      <tbody>${d.users.map((u) => `<tr class="clickable" data-uid="${u.id}"><td>${esc(u.department || '')}</td><td>${userLabel(u)}</td><td><span class="badge corp">${esc(u.card_label)}</span></td><td class="n">${ddLink(u.cnt, u.name + ' 법인카드', { kind: 'expenses', book: 'team', user_ids: u.id })}</td>
+        ${cats.map((c) => `<td class="n">${ddLink(won(u.by[c] || 0), u.name + ' · ' + c, { kind: 'expenses', book: 'team', user_ids: u.id, category: c })}</td>`).join('')}<td class="n"><b>${ddLink(won(u.amount), u.name + ' 법인카드', { kind: 'expenses', book: 'team', user_ids: u.id })}</b></td><td class="n">${ddLink(u.photos, u.name + ' 영수증 있는 사용', { kind: 'expenses', book: 'team', user_ids: u.id, has_photo: 1 })}</td></tr>`).join('') || `<tr><td colspan="${cats.length + 6}" class="empty">데이터 없음</td></tr>`}</tbody>
+      <tfoot><tr><td colspan="3">합계</td><td class="n">${ddLink(cnt, '부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td>${cats.map((c) => `<td class="n">${ddLink(won(d.users.reduce((a, u) => a + (u.by[c] || 0), 0)), '부서팀장 법인카드 · ' + c, { kind: 'expenses', book: 'team', holders: 1, category: c })}</td>`).join('')}<td class="n">${ddLink(won(tot), '부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td><td></td></tr></tfoot></table></div>
+    <p class="note">숫자를 누르면 해당 내역이 열리고, 이름을 누르면 해당 사용자의 법인카드 일지로 이동합니다.</p>
     <h2 style="margin-top:20px">월별 추이</h2>
-    <div class="card"><div class="bars">${d.monthly.map((m) => `<div class="bar-row"><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원 · ${m.cnt}건</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>`;
+    <div class="card"><div class="bars">${d.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 부서팀장 법인카드', { kind: 'expenses', book: 'team', holders: 1, ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원 · ${m.cnt}건</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>`;
   bindSummaryTabs(main);
   $$('tr[data-uid]', main).forEach((tr) => (tr.onclick = () => go('teamcard/u/' + tr.dataset.uid)));
 }
@@ -861,6 +924,10 @@ async function pageSummary() {
     ['parking_won', '주차비', won], ['operating_cost_won', '운행비 합계', won], ['fueling_won', '월 주유비(카드)', won],
     ['corporate_card_won', '법인카드', won], ['personal_card_won', '개인카드', won], ['maintenance_won', '관리·점검비', won],
   ];
+  const sq = { scope: 'summary', user_ids: state.sumUsers.length ? state.sumUsers : undefined };
+  const colQ = (k) => k === 'fueling_won' ? { kind: 'expenses', category: ['주유', '주유비'] } : k === 'corporate_card_won' ? { kind: 'expenses', card_type: 'corporate' }
+    : k === 'personal_card_won' ? { kind: 'expenses', card_type: 'personal' } : k === 'maintenance_won' ? { kind: 'maintenance' } : { kind: 'trips' };
+  const cell = (k, label, v, extra, who) => ddLink(v, `${who || '전체'} · ${label}`, { ...sq, ...colQ(k), ...extra });
   const maxOp = Math.max(1, ...data.monthly.map((m) => m.operating_cost_won));
   const maxCard = Math.max(1, ...data.monthly.map((m) => m.corporate_card_won + m.personal_card_won));
   main.innerHTML = `<div class="page-head">${summaryTabs()}<div class="grow"></div>${rangeControls(pageSummary)}</div>
@@ -869,23 +936,23 @@ async function pageSummary() {
       ${users.map((u) => `<label class="inline" style="font-size:13px;color:var(--ink);font-weight:400"><input type="checkbox" value="${u.id}" style="width:auto" ${state.sumUsers.includes(u.id) ? 'checked' : ''}>${userLabel(u)}${u.active ? '' : ' <span class="badge off">퇴사</span>'}</label>`).join('')}
       </div></div>` : ''}
     <div class="kpis">
-      <div class="kpi"><div class="l">총 운행거리</div><div class="v">${km(sum('distance_km'))} km</div></div>
-      <div class="kpi"><div class="l">총 운행비</div><div class="v">${won(sum('operating_cost_won'))}원</div></div>
-      <div class="kpi"><div class="l">주유비(카드)</div><div class="v">${won(sum('fueling_won'))}원</div></div>
-      <div class="kpi"><div class="l">법인카드</div><div class="v">${won(sum('corporate_card_won'))}원</div></div>
-      <div class="kpi"><div class="l">개인카드</div><div class="v">${won(sum('personal_card_won'))}원</div></div>
-      <div class="kpi"><div class="l">관리·점검비</div><div class="v">${won(sum('maintenance_won'))}원</div></div></div>
+      <div class="kpi pick" ${dd('전체 · 총 운행거리', { ...sq, ...colQ('distance_km') })}><div class="l">총 운행거리</div><div class="v">${km(sum('distance_km'))} km</div></div>
+      <div class="kpi pick" ${dd('전체 · 총 운행비', { ...sq, ...colQ('operating_cost_won') })}><div class="l">총 운행비</div><div class="v">${won(sum('operating_cost_won'))}원</div></div>
+      <div class="kpi pick" ${dd('전체 · 주유비(카드)', { ...sq, ...colQ('fueling_won') })}><div class="l">주유비(카드)</div><div class="v">${won(sum('fueling_won'))}원</div></div>
+      <div class="kpi pick" ${dd('전체 · 법인카드', { ...sq, ...colQ('corporate_card_won') })}><div class="l">법인카드</div><div class="v">${won(sum('corporate_card_won'))}원</div></div>
+      <div class="kpi pick" ${dd('전체 · 개인카드', { ...sq, ...colQ('personal_card_won') })}><div class="l">개인카드</div><div class="v">${won(sum('personal_card_won'))}원</div></div>
+      <div class="kpi pick" ${dd('전체 · 관리·점검비', { ...sq, ...colQ('maintenance_won') })}><div class="l">관리·점검비</div><div class="v">${won(sum('maintenance_won'))}원</div></div></div>
     <h2>직원별 비교</h2>
     <div class="table-wrap"><table><thead><tr><th>부서</th><th>직원</th>${cols.map((c) => `<th class="n">${c[1]}</th>`).join('')}</tr></thead>
       <tbody>${U.map((r) => `<tr class="clickable" data-uid="${r.id}"><td>${esc(r.department || '')}</td><td>${userLabel(r)}${r.active ? '' : ' <span class="badge off">퇴사</span>'}</td>
-        ${cols.map((c) => `<td class="n">${c[2](r[c[0]])}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${cols.length + 2}" class="empty">데이터 없음</td></tr>`}</tbody>
-      <tfoot><tr><td colspan="2">합계</td>${cols.map((c) => `<td class="n">${c[2](sum(c[0]))}</td>`).join('')}</tr></tfoot></table></div>
-    <p class="note">운행비 = 연료비(공식연비×유가) + 통행료 + 주차비. 행을 누르면 해당 직원 운행일지로 이동합니다.</p>
+        ${cols.map((c) => `<td class="n">${cell(c[0], c[1], c[2](r[c[0]]), { user_ids: r.id }, r.name)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${cols.length + 2}" class="empty">데이터 없음</td></tr>`}</tbody>
+      <tfoot><tr><td colspan="2">합계</td>${cols.map((c) => `<td class="n">${cell(c[0], c[1], c[2](sum(c[0])), {})}</td>`).join('')}</tr></tfoot></table></div>
+    <p class="note">운행비 = 연료비(공식연비×유가) + 통행료 + 주차비. 숫자를 누르면 해당 내역이 열리고, 이름을 누르면 해당 직원 운행일지로 이동합니다.</p>
     <h2 style="margin-top:20px">월별 추이</h2>
-    <div class="grid2"><div class="card"><div class="note" style="margin-bottom:8px">운행비 합계</div><div class="bars">${data.monthly.map((m) => `<div class="bar-row"><span>${m.ym}</span><div class="bar" style="width:${(m.operating_cost_won / maxOp) * 100}%"></div><span class="n">${won(m.operating_cost_won)}원</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>
-      <div class="card"><div class="note" style="margin-bottom:8px">카드 사용 (법인+개인)</div><div class="bars">${data.monthly.map((m) => `<div class="bar-row"><span>${m.ym}</span><div class="bar alt" style="width:${((m.corporate_card_won + m.personal_card_won) / maxCard) * 100}%"></div><span class="n">${won(m.corporate_card_won + m.personal_card_won)}원</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div></div>
+    <div class="grid2"><div class="card"><div class="note" style="margin-bottom:8px">운행비 합계</div><div class="bars">${data.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 운행 기록', { ...sq, kind: 'trips', ym: m.ym })}><span>${m.ym}</span><div class="bar" style="width:${(m.operating_cost_won / maxOp) * 100}%"></div><span class="n">${won(m.operating_cost_won)}원</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>
+      <div class="card"><div class="note" style="margin-bottom:8px">카드 사용 (법인+개인)</div><div class="bars">${data.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 카드 사용', { ...sq, kind: 'expenses', ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${((m.corporate_card_won + m.personal_card_won) / maxCard) * 100}%"></div><span class="n">${won(m.corporate_card_won + m.personal_card_won)}원</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div></div>
     <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>월</th><th class="n">운행km</th><th class="n">연료비</th><th class="n">통행료</th><th class="n">운행비</th><th class="n">월 주유비</th><th class="n">법인카드</th><th class="n">개인카드</th></tr></thead>
-      <tbody>${data.monthly.map((m) => `<tr><td>${m.ym}</td><td class="n">${km(m.distance_km)}</td><td class="n">${won(m.fuel_cost_won)}</td><td class="n">${won(m.toll_won)}</td><td class="n">${won(m.operating_cost_won)}</td><td class="n">${won(m.fueling_won)}</td><td class="n">${won(m.corporate_card_won)}</td><td class="n">${won(m.personal_card_won)}</td></tr>`).join('')}</tbody></table></div>`;
+      <tbody>${data.monthly.map((m) => `<tr><td>${m.ym}</td><td class="n">${cell('distance_km', '운행km', km(m.distance_km), { ym: m.ym }, m.ym)}</td><td class="n">${cell('fuel_cost_won', '연료비', won(m.fuel_cost_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('toll_won', '통행료', won(m.toll_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('operating_cost_won', '운행비', won(m.operating_cost_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('fueling_won', '월 주유비', won(m.fueling_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('corporate_card_won', '법인카드', won(m.corporate_card_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('personal_card_won', '개인카드', won(m.personal_card_won), { ym: m.ym }, m.ym)}</td></tr>`).join('')}</tbody></table></div>`;
   $$('[data-uid]', main).forEach((tr) => (tr.onclick = async () => {
     if (!isAdmin()) return go('trips');
     go('trips/u/' + tr.dataset.uid);

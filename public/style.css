@@ -183,3 +183,10 @@ h3.sec { font-size: 15px; margin: 10px 0 0; padding-top: 12px; border-top: 1px s
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .calc { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* 숫자 상세 보기 (드릴다운) */
+[data-drill], [data-vlv] { cursor: pointer; }
+.dl { cursor: pointer; border-bottom: 1px dotted currentColor; }
+.dl:hover { color: var(--corp, #6b4a2b); border-bottom-style: solid; }
+.kpi.pick:hover, .bar-row.pick:hover { box-shadow: 0 0 0 2px rgba(107, 74, 43, .25); }
+.bar-row.pick { border-radius: 6px; }
