@@ -190,3 +190,5 @@ h3.sec { font-size: 15px; margin: 10px 0 0; padding-top: 12px; border-top: 1px s
 .dl:hover { color: var(--corp, #6b4a2b); border-bottom-style: solid; }
 .kpi.pick:hover, .bar-row.pick:hover { box-shadow: 0 0 0 2px rgba(107, 74, 43, .25); }
 .bar-row.pick { border-radius: 6px; }
+.kpi.pick .l::after, .kpi[data-vlv] .l::after { content: ' ›'; opacity: .6; }
+.kpi.pick:hover .v, .kpi[data-vlv]:hover .v { text-decoration: underline; text-underline-offset: 4px; }

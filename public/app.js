@@ -576,8 +576,8 @@ async function dayForm(u, vehicles) {
     const k = 'x' + (++seq);
     const el = document.createElement('div'); el.className = 'exp-row'; el.dataset.key = k;
     el.innerHTML = `<div class="exp-grid"><select name="cat">${EXP_CATS.map((x) => `<option>${x}</option>`).join('')}</select>
-      <input name="etc" class="hidden" placeholder="기타 항목 입력"><input name="amount" inputmode="numeric" placeholder="금액(원)">
-      <input name="purpose" placeholder="내용 (예: 운영팀 중식)"><button class="btn sm danger" data-rm>×</button></div>
+      <input name="etc" class="hidden" placeholder="기타 사용 목적 직접 입력"><input name="amount" inputmode="numeric" placeholder="금액(원)">
+      <input name="purpose" placeholder="상세 내용 (예: 운영팀 중식)"><button class="btn sm danger" data-rm>×</button></div>
       <label class="note">영수증 사진<input type="file" name="photos" accept="image/*,application/pdf" multiple></label><div class="photo-edit"></div>`;
     $(`.exp-rows[data-card=${card}]`, c).appendChild(el);
     $('[name=cat]', el).onchange = (e) => $('[name=etc]', el).classList.toggle('hidden', e.target.value !== '기타');
@@ -690,8 +690,8 @@ function teamForm(u) {
     const k = 't' + (++seq);
     const el = document.createElement('div'); el.className = 'exp-row'; el.dataset.key = k;
     el.innerHTML = `<div class="exp-grid"><select name="cat">${TEAM_CATS.map((x) => `<option>${x}</option>`).join('')}</select>
-      <input name="etc" class="hidden" placeholder="기타 항목 입력"><input name="amount" inputmode="numeric" placeholder="금액(원)">
-      <input name="purpose" placeholder="사용 목적 (예: 팀 회의 식대)"><button class="btn sm danger" data-rm>×</button></div>
+      <input name="etc" class="hidden" placeholder="기타 사용 목적 직접 입력"><input name="amount" inputmode="numeric" placeholder="금액(원)">
+      <input name="purpose" placeholder="상세 내용 (예: 팀 회의 식대)"><button class="btn sm danger" data-rm>×</button></div>
       <label class="note">영수증 사진<input type="file" name="photos" accept="image/*,application/pdf" multiple></label><div class="photo-edit"></div>`;
     box.appendChild(el);
     $('[name=cat]', el).onchange = (e) => $('[name=etc]', el).classList.toggle('hidden', e.target.value !== '기타');
@@ -772,22 +772,28 @@ function expenseForm(u, vehicles, rec, opt = {}) {
   const team = opt.book === 'team';
   const after = opt.after || (() => { state.tab = 'expenses'; pageTrips(); });
   const r = rec || { expense_date: today(), card_type: 'corporate', category: '식대', amount: '' };
+  const isStd = (team ? TEAM_CATS : EXP_CATS).includes(r.category) && r.category !== '기타' || r.category === '기타';
   const c = openModal(`<h2>${rec ? '카드 사용 수정' : '카드 사용 등록'} · ${userLabel(u)}${team ? ' · 부서팀장 법인카드' : ''}</h2>
     <div class="row${team ? ' hidden' : ''}">${['corporate', 'personal'].map((t) => `<label class="inline" style="font-size:14px;color:var(--ink)"><input type="radio" name="card_type" value="${t}" style="width:auto" ${r.card_type === t ? 'checked' : ''}> ${CARD[t]}</label>`).join('')}</div>
     <div class="grid3"><label>사용일자<input type="date" name="expense_date" value="${String(r.expense_date).slice(0, 10)}"></label>
-      <label>항목<select name="category">${((cats) => (cats.includes(r.category) ? cats : [...cats, r.category]))(team ? TEAM_CATS : EXP_CATS).map((x) => `<option ${x === r.category ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
+      <label>사용 목적<select name="category">${(team ? TEAM_CATS : EXP_CATS).map((x) => `<option ${x === (isStd ? r.category : '기타') ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
+        <input name="cat_etc" class="${isStd && r.category !== '기타' ? 'hidden' : ''}" placeholder="기타 사용 목적 직접 입력" value="${isStd || r.category === '기타' ? '' : esc(r.category || '')}" style="margin-top:6px"></label>
       <label>금액 (원)<input name="amount" inputmode="numeric" value="${r.amount}"></label></div>
-    <div class="grid2"><label>사용 목적<input name="purpose" value="${esc(r.purpose || '')}"></label>
+    <div class="grid2"><label>상세 내용 (선택)<input name="purpose" placeholder="예: 용인동백점 오픈지원 식대" value="${esc(r.purpose || '')}"></label>
       <label class="${team ? 'hidden' : ''}">차량<select name="vehicle_id"><option value="">-</option>${vehicles.map((v) => `<option value="${v.id}" ${v.id == r.vehicle_id ? 'selected' : ''}>${esc(v.plate)}</option>`).join('')}</select></label></div>
     <label>비고<input name="memo" value="${esc(r.memo || '')}"></label>
     ${photoPicker(r.photos)}
     <div class="modal-actions">${rec ? '<button class="btn danger" id="del">삭제</button><div style="flex:1"></div>' : ''}<button class="btn" data-close>취소</button><button class="btn primary" id="save">저장</button></div>`);
   bindPhotoPicker(c);
+  $('[name=category]', c).onchange = (e) => { const on = e.target.value === '기타'; $('[name=cat_etc]', c).classList.toggle('hidden', !on); if (on) $('[name=cat_etc]', c).focus(); };
   $('#save', c).onclick = async () => {
     const fd = new FormData();
+    const catSel = $('[name=category]', c).value, catEtc = $('[name=cat_etc]', c).value.trim();
+    if (catSel === '기타' && !catEtc && !(rec && rec.category === '기타')) return toast('기타 사용 목적을 직접 입력하세요', true);
     fd.append('user_id', u.id); fd.append('book', team ? 'team' : 'drive');
     fd.append('card_type', team ? 'corporate' : ($('[name=card_type]:checked', c)?.value || ''));
-    ['expense_date', 'category', 'amount', 'purpose', 'vehicle_id', 'memo'].forEach((n) => fd.append(n, $(`[name=${n}]`, c).value));
+    fd.append('category', catSel === '기타' ? (catEtc || '기타') : catSel);
+    ['expense_date', 'amount', 'purpose', 'vehicle_id', 'memo'].forEach((n) => fd.append(n, $(`[name=${n}]`, c).value));
     for (const f of $('[name=photos]', c).files) fd.append('photos', await shrink(f));
     try { await api(rec ? `/api/expenses/${rec.id}` : '/api/expenses', { method: rec ? 'PUT' : 'POST', body: fd }); closeModal(); toast('저장되었습니다'); after(); } catch (e) { fail(e); }
   };
