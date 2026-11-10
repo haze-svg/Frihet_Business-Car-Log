@@ -71,8 +71,10 @@ function normalize(t) {
       name: u.card.nickname || u.card.name || '',
       number: u.card.number || '',
       owners: (u.card.owners || []).filter((x) => !x.isDeleted).map((x) => (x.email || '').toLowerCase()).filter(Boolean),
+      ownerNames: (u.card.owners || []).filter((x) => !x.isDeleted).map((x) => (x.name || '').trim()).filter(Boolean),
     },
     users: (t.users || []).filter((x) => !x.isDeleted).map((x) => (x.email || '').toLowerCase()).filter(Boolean),
+    userNames: (t.users || []).filter((x) => !x.isDeleted).map((x) => (x.name || '').trim()).filter(Boolean),
   };
 }
 
@@ -97,8 +99,17 @@ async function sync({ reason = 'auto' } = {}) {
     }
     out.fetched = tickets.length;
 
-    const users = (await q('SELECT id,email,position,team_card,active FROM users')).rows;
+    const users = (await q('SELECT id,name,nickname,email,position,team_card,active FROM users')).rows;
     const byEmail = new Map(users.map((u) => [String(u.email || '').toLowerCase(), u]));
+    const active = users.filter((u) => u.active);
+    // 이름 매칭: 실명 또는 영문 별명(닉네임) 일치. 같은 이름이 2명 이상이면 매칭하지 않음
+    const byName = (n) => {
+      const k = String(n || '').trim().toLowerCase(); if (!k) return null;
+      const hit = active.filter((u) => [u.name, u.nickname].some((x) => String(x || '').trim().toLowerCase() === k));
+      return hit.length === 1 ? hit[0] : null;
+    };
+    // 카드명 앞 담당자 이름 (예: '노아_기업체크카드(8912)' → 노아)
+    const byCardName = (name) => { const m = String(name || '').match(/^([^_\s(]+)_/); return m ? byName(m[1]) : null; };
     const seen = new Set();
 
     for (const t of tickets) {
@@ -118,10 +129,11 @@ async function sync({ reason = 'auto' } = {}) {
         if (card.book === 'off') out.skipped_off++;
         continue;
       }
-      // 사용자: 관리자 지정 > 그랜터 사용직원 > 카드 소유자
+      // 사용자: 관리자 지정 > 카드명 담당자 이름 > 그랜터 사용직원(이메일·이름) > 카드 소유자(이메일·이름)
       const user = (card.user_id && users.find((u) => u.id === card.user_id))
-        || x.users.map((m) => byEmail.get(m)).find(Boolean)
-        || x.card.owners.map((m) => byEmail.get(m)).find(Boolean);
+        || byCardName(x.card.name)
+        || x.users.map((m) => byEmail.get(m)).find(Boolean) || x.userNames.map(byName).find(Boolean)
+        || x.card.owners.map((m) => byEmail.get(m)).find(Boolean) || x.card.ownerNames.map(byName).find(Boolean);
       if (!user) { out.skipped_unmapped++; continue; }
       const book = card.book === 'drive' || card.book === 'team' ? card.book : (isHolder(user) ? 'team' : 'drive');
 

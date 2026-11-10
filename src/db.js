@@ -161,6 +161,8 @@ async function migrate() {
     book TEXT NOT NULL DEFAULT 'auto',
     last_seen TIMESTAMPTZ
   )`);
+  // 부서팀장 법인카드 일지에 별도 항목으로 보일 이름 (예: 백은하(실버) - 삼성카드 전용)
+  await pool.query('ALTER TABLE granter_cards ADD COLUMN IF NOT EXISTS label TEXT');
 }
 
 module.exports = { pool, q, migrate };

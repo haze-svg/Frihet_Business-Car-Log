@@ -168,7 +168,7 @@ function go(hash) {
 const back = (fallback) => { if (history.length > 1 && state.navCount > 1) history.back(); else go(fallback); };
 async function render() {
   state.navCount = (state.navCount || 0) + 1;
-  const [page, kind, id] = (location.hash.replace('#', '') || 'trips').split('/');
+  const [page, kind, id, sub] = (location.hash.replace('#', '') || 'trips').split('/');
   state.page = page;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
   state.tripUser = null; state.vehicle = null; state.cardUser = null;
@@ -176,7 +176,7 @@ async function render() {
     if (page === 'trips' && kind === 'u' && id) {
       state.tripUser = isAdmin() ? (await api('/api/users?all=1')).find((u) => u.id == id) : state.me;
     }
-    if (page === 'teamcard' && kind === 'u' && id) state.cardUser = (await api('/api/leads')).find((u) => u.id == id) || null;
+    if (page === 'teamcard' && kind === 'u' && id) state.cardUser = (await api('/api/leads')).find((u) => u.id == id && String(u.card_id || '') === String(sub || '')) || null;
     if (page === 'maintenance' && kind === 'v' && id) state.vehicle = (await api('/api/vehicles?scope=all')).find((v) => v.id == id) || null;
   } catch (e) { fail(e); }
   // 관리자 전용 화면은 관리자만 (서버에서도 차단)
@@ -701,23 +701,26 @@ function expItemHtml(r) {
 }
 async function pageTeamCard() {
   const main = $('#main');
-  if (!isAdmin()) state.cardUser = state.me.is_holder ? state.me : null;
-  if (!isAdmin() && !state.cardUser) { main.innerHTML = '<div class="card empty">법인카드 일지 사용 대상이 아닙니다.</div>'; return; }
-  if (state.cardUser && !state.cardUser.card_label) state.cardUser.card_label = state.cardUser.team_card || '팀장카드';
+  let leads = null;
+  if (!isAdmin() && !state.cardUser) {
+    leads = await api('/api/leads');
+    if (!leads.length) { main.innerHTML = '<div class="card empty">법인카드 일지 사용 대상이 아닙니다.</div>'; return; }
+    if (leads.length === 1) state.cardUser = leads[0];
+  }
   if (!state.cardUser) {
-    const leads = await api('/api/leads');
+    leads ||= await api('/api/leads');
     main.innerHTML = `<div class="page-head"><h1>부서팀장 법인카드 일지</h1></div><p class="note">카드 사용자를 선택하세요. (직책에 '팀장'이 포함된 직원 + 직원·차량 관리에서 카드 구분을 지정한 직원)</p>
-      <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}"><div class="row" style="justify-content:space-between"><div class="t">${userLabel(u)}</div><span class="badge corp">${esc(u.card_label)}</span></div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
+      <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}${u.card_id ? '/' + esc(u.card_id) : ''}"><div class="row" style="justify-content:space-between"><div class="t">${userLabel(u)}</div><span class="badge corp">${esc(u.card_label)}</span></div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
     $$('[data-uid]', main).forEach((el) => (el.onclick = () => go('teamcard/u/' + el.dataset.uid)));
     return;
   }
   const u = state.cardUser;
-  const rows0 = await api(`/api/expenses?book=team&user_id=${u.id}&${rq()}`);
+  const rows0 = await api(`/api/expenses?book=team&user_id=${u.id}&card=${u.card_id ? encodeURIComponent(u.card_id) : 'main'}&${rq()}`);
   const rows = rows0.filter((r) => r.card_type !== 'receipt'), bundles = rows0.filter((r) => r.card_type === 'receipt');
   const total = rows.reduce((a, r) => a + r.amount, 0), nPh = rows.reduce((a, r) => a + r.photos.length, 0);
   const days = {}; rows.forEach((r) => (days[r.expense_date.slice(0, 10)] ||= []).push(r));
   const cats = {}; rows.forEach((r) => (cats[r.category] = (cats[r.category] || 0) + r.amount));
-  main.innerHTML = `<div class="crumb">${isAdmin() ? `${backBtn('teamcard')} <a id="back">부서팀장 법인카드 일지</a> / ` : ''}${userLabel(u)}</div>
+  main.innerHTML = `<div class="crumb">${isAdmin() || leads?.length > 1 || u.card_id ? `${backBtn('teamcard')} <a id="back">부서팀장 법인카드 일지</a> / ` : ''}${userLabel(u)}</div>
     <div class="page-head"><h1>${userLabel(u)} 법인카드 일지 <span class="badge corp">${esc(u.card_label)}</span></h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
     <div class="kpis"><div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
       <div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
@@ -1198,15 +1201,17 @@ async function granterAdmin() {
   const BOOK = { auto: '자동 (팀장카드 대상자면 팀장일지)', drive: '차량운행일지', team: '부서팀장 법인카드 일지', off: '연동 안 함' };
   box.innerHTML = `<h2>그랜터 법인카드 연동 ${g.enabled ? '<span class="badge ok">API 키 등록됨</span>' : '<span class="badge off">API 키 미등록</span>'}</h2>
     <p class="note">10분마다 그랜터 카드 사용내역을 자동으로 불러옵니다. 금액·일자·가맹점은 그랜터 기준이며, 취소·제외 처리된 건은 자동으로 빠집니다. 직원은 사용 목적·상세내용·영수증만 입력합니다.
-      직원 연결 순서: 아래에서 지정한 직원 → 그랜터 '사용직원' 이메일 → 카드 소유자 이메일. ${g.enabled ? '' : '<b>API 키는 FND 환경변수 GRANTER_API_KEY 에 등록해야 동작합니다.</b>'}</p>
+      직원 연결 순서: 아래에서 지정한 직원 → 카드명 앞 담당자 이름(예: 노아_기업체크카드 → 노아) → 그랜터 사용직원·카드 소유자. 기록 위치 '자동'은 팀장카드 대상자면 부서팀장 일지, 아니면 차량운행일지입니다.
+      '일지 표시명'을 넣고 기록 위치를 부서팀장 법인카드 일지로 두면 그 카드는 팀장일지에 별도 항목으로 보입니다. ${g.enabled ? '' : '<b>API 키는 FND 환경변수 GRANTER_API_KEY 에 등록해야 동작합니다.</b>'}</p>
     <div class="row"><label class="inline">연동 시작일 <input type="date" name="g_from" value="${esc(g.from)}" style="width:auto"></label><button class="btn sm" id="g-from">시작일 저장</button>
       <button class="btn primary" id="g-sync" ${g.enabled ? '' : 'disabled'}>지금 동기화</button></div>
     <div class="note">최근 동기화: ${L ? `${esc(new Date(L.at).toLocaleString('ko-KR'))} · ${L.ok ? `조회 ${L.fetched}건 · 신규 ${L.inserted} · 수기입력 흡수 ${L.merged} · 변경 ${L.updated} · 삭제 ${L.removed} · 직원 미연결 ${L.skipped_unmapped}건` : '실패: ' + esc(L.error)}` : '없음'}</div>
-    <div class="table-wrap"><table><thead><tr><th>그랜터 카드</th><th>카드번호</th><th>연결 직원</th><th>기록 위치</th><th class="n">적재</th><th class="n">목적 미선택</th><th></th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>그랜터 카드</th><th>카드번호</th><th>연결 직원</th><th>기록 위치</th><th>일지 표시명 (별도 항목)</th><th class="n">적재</th><th class="n">목적 미선택</th><th></th></tr></thead><tbody>
     ${g.cards.map((c) => `<tr data-card="${esc(c.card_id)}"><td class="wrap">${esc(c.name)}</td><td>${esc(c.number || '')}</td>
-      <td><select name="uid"><option value="">자동 (사용직원 기준)</option>${users.filter((u) => u.active || u.id === c.user_id).map((u) => `<option value="${u.id}" ${u.id === c.user_id ? 'selected' : ''}>${esc(u.name)}${u.nickname ? ' (' + esc(u.nickname) + ')' : ''}</option>`).join('')}</select></td>
-      <td><select name="book">${Object.entries(BOOK).map(([k, v]) => `<option value="${k}" ${k === c.book ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
-      <td class="n">${c.n}</td><td class="n">${c.n_unset}</td><td><button class="btn sm" data-csave>저장</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">아직 불러온 카드가 없습니다. 동기화 후 표시됩니다.</td></tr>'}</tbody></table></div>`;
+      <td><select name="uid"><option value="">자동${c.auto_user ? ': ' + esc(c.auto_user) : ' (매칭 없음)'}</option>${users.filter((u) => u.active || u.id === c.user_id).map((u) => `<option value="${u.id}" ${u.id === c.user_id ? 'selected' : ''}>${esc(u.name)}${u.nickname ? ' (' + esc(u.nickname) + ')' : ''}</option>`).join('')}</select></td>
+      <td><select name="book">${Object.entries(BOOK).map(([k, v]) => `<option value="${k}" ${k === c.book ? 'selected' : ''}>${k === 'auto' && c.auto_book ? '자동: ' + (c.auto_book === 'team' ? '부서팀장 일지' : '차량운행일지') : v}</option>`).join('')}</select></td>
+      <td><input name="label" value="${esc(c.label || '')}" placeholder="예: 삼성카드 전용"></td>
+      <td class="n">${c.n}</td><td class="n">${c.n_unset}</td><td><button class="btn sm" data-csave>저장</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">아직 불러온 카드가 없습니다. 동기화 후 표시됩니다.</td></tr>'}</tbody></table></div>`;
   $('#g-from').onclick = async () => { try { await api('/api/admin/granter/from', { method: 'PUT', body: { from: $('[name=g_from]', box).value } }); toast('시작일 저장'); granterAdmin(); } catch (e) { fail(e); } };
   $('#g-sync').onclick = async (ev) => {
     ev.target.disabled = true; ev.target.textContent = '동기화 중…';
@@ -1216,7 +1221,7 @@ async function granterAdmin() {
   $$('[data-csave]', box).forEach((b) => (b.onclick = async () => {
     const tr = b.closest('tr');
     try {
-      await api('/api/admin/granter/cards/' + encodeURIComponent(tr.dataset.card), { method: 'PUT', body: { user_id: $('[name=uid]', tr).value || null, book: $('[name=book]', tr).value } });
+      await api('/api/admin/granter/cards/' + encodeURIComponent(tr.dataset.card), { method: 'PUT', body: { user_id: $('[name=uid]', tr).value || null, book: $('[name=book]', tr).value, label: $('[name=label]', tr).value } });
       toast('저장 · 다음 동기화부터 반영 (지금 동기화로 즉시 반영)');
     } catch (e) { fail(e); }
   }));

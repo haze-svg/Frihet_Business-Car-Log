@@ -539,9 +539,14 @@ app.put('/api/expenses/:id/classify', auth, upload.array('photos', 10), wrap(asy
 app.get('/api/expenses', auth, wrap(async (req, res) => {
   const { from, to } = period(req);
   const uid = targetUserId(req, req.query.user_id);
+  // 부서팀장 일지 별도 카드 항목: card=<그랜터 카드 ID> 는 그 카드만, card=main 은 별도 항목 카드를 제외
+  let cardCond = '';
+  const params = [uid, from, to, req.query.book === 'team' ? 'team' : 'drive'];
+  if (req.query.card === 'main') cardCond = `AND (e.ext_card IS NULL OR e.ext_card NOT IN (SELECT card_id FROM granter_cards WHERE book='team' AND label IS NOT NULL AND label<>''))`;
+  else if (req.query.card) { params.push(String(req.query.card)); cardCond = 'AND e.ext_card=$5'; }
   const r = await q(
     `SELECT e.*, v.plate FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id
-     WHERE e.user_id=$1 AND e.expense_date BETWEEN $2 AND $3 AND e.book=$4 ORDER BY e.expense_date DESC, e.id DESC`, [uid, from, to, req.query.book === 'team' ? 'team' : 'drive']
+     WHERE e.user_id=$1 AND e.expense_date BETWEEN $2 AND $3 AND e.book=$4 ${cardCond} ORDER BY e.expense_date DESC, e.id DESC`, params
   );
   const photos = await photoList('expense', r.rows.map((x) => x.id));
   res.json(r.rows.map((x) => ({ ...x, photos: photos[x.id] || [] })));
@@ -588,7 +593,16 @@ app.delete('/api/expenses/:id', auth, wrap(async (req, res) => {
 // ---------- 법인카드 사용 관리 (관리자) ----------
 app.get('/api/leads', auth, wrap(async (req, res) => {
   const r = await q(`SELECT id,name,nickname,department,position,active,team_card FROM users WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') ${isAdmin(req) ? '' : 'AND id=$1'} ORDER BY department NULLS LAST, name`, isAdmin(req) ? [] : [req.user.id]);
-  res.json(r.rows.map((u) => ({ ...u, card_label: cardLabel(u) })));
+  // 별도 항목으로 지정한 그랜터 카드 (예: 삼성카드 전용)
+  const c = await q(`SELECT g.card_id, g.label, u.id,u.name,u.nickname,u.department,u.position,u.active,u.team_card FROM granter_cards g JOIN users u ON u.id=g.user_id
+    WHERE g.book='team' AND g.label IS NOT NULL AND g.label<>'' ${isAdmin(req) ? '' : 'AND u.id=$1'} ORDER BY u.name, g.label`, isAdmin(req) ? [] : [req.user.id]);
+  const out = [];
+  for (const u of r.rows) {
+    out.push({ ...u, card_id: null, card_label: cardLabel(u) });
+    for (const x of c.rows.filter((y) => y.id === u.id)) out.push({ ...u, card_id: x.card_id, card_label: x.label });
+  }
+  for (const x of c.rows.filter((y) => !r.rows.some((u) => u.id === y.id))) out.push({ ...x, card_id: x.card_id, card_label: x.label });
+  res.json(out);
 }));
 app.get('/api/card-stats', auth, admin, wrap(async (req, res) => {
   const { from, to } = period(req);
@@ -816,13 +830,15 @@ app.get('/api/public-config', auth, wrap(async (req, res) => {
 // 그랜터 연동 관리 (관리자)
 app.get('/api/admin/granter', auth, admin, wrap(async (req, res) => {
   const cards = (await q(`SELECT c.*, (SELECT count(*)::int FROM expenses e WHERE e.ext_card=c.card_id) AS n,
+      (SELECT u.name || COALESCE('(' || u.nickname || ')', '') FROM expenses e JOIN users u ON u.id=e.user_id WHERE e.ext_card=c.card_id GROUP BY u.id ORDER BY count(*) DESC LIMIT 1) AS auto_user,
+      (SELECT e.book FROM expenses e WHERE e.ext_card=c.card_id GROUP BY e.book ORDER BY count(*) DESC LIMIT 1) AS auto_book,
       (SELECT count(*)::int FROM expenses e WHERE e.ext_card=c.card_id AND e.category=$1) AS n_unset
     FROM granter_cards c ORDER BY c.name`, [granter.UNSET])).rows;
   res.json({ ...(await granter.status()), cards });
 }));
 app.put('/api/admin/granter/cards/:id', auth, admin, wrap(async (req, res) => {
   const book = ['auto', 'drive', 'team', 'off'].includes(req.body.book) ? req.body.book : 'auto';
-  await q('UPDATE granter_cards SET user_id=$1, book=$2 WHERE card_id=$3', [req.body.user_id ? int(req.body.user_id) : null, book, String(req.params.id)]);
+  await q('UPDATE granter_cards SET user_id=$1, book=$2, label=$3 WHERE card_id=$4', [req.body.user_id ? int(req.body.user_id) : null, book, str(req.body.label), String(req.params.id)]);
   res.json({ ok: true });
 }));
 app.put('/api/admin/granter/from', auth, admin, wrap(async (req, res) => {
