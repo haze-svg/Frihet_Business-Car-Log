@@ -188,6 +188,19 @@ async function migrate() {
     await pool.query("DELETE FROM expenses WHERE source='granter' AND ext_card IN (SELECT card_id FROM granter_cards WHERE book='off')");
     if (r.rowCount) await pool.query("INSERT INTO settings(key,value) VALUES('mig_exec_cards_off','1')");
   }
+  // 1회 적용 (대표 지시 2026-11-11 04:32): 공용업무카드(8974)·삼성카드(7578) → 백은하, 불필요 KB국민 카드 연동 제외
+  const doneB = await pool.query("SELECT 1 FROM settings WHERE key='mig_cards_1111b'");
+  if (!doneB.rows.length) {
+    const silver = "(SELECT id FROM users WHERE name='백은하' AND nickname='실버' LIMIT 1)";
+    const a1 = await pool.query(`UPDATE granter_cards SET user_id=${silver}, book='team', label='공용업무카드' WHERE number LIKE '%8974'`);
+    const a2 = await pool.query(`UPDATE granter_cards SET user_id=${silver}, book='team', label='삼성카드 전용' WHERE number LIKE '%7578'`);
+    const a3 = await pool.query(`UPDATE granter_cards SET book='off', user_id=NULL, label=NULL
+      WHERE number LIKE '%3990' OR number LIKE '%9967' OR number LIKE '%2983' OR number LIKE '%6904' OR number LIKE '%3907'
+         OR number LIKE '%9902' OR number LIKE '%3959' OR number LIKE '%7860' OR number LIKE '%6811' OR number LIKE '%6843'`);
+    await pool.query("DELETE FROM photos WHERE owner_type='expense' AND owner_id IN (SELECT id FROM expenses WHERE source='granter' AND ext_card IN (SELECT card_id FROM granter_cards WHERE book='off'))");
+    await pool.query("DELETE FROM expenses WHERE source='granter' AND ext_card IN (SELECT card_id FROM granter_cards WHERE book='off')");
+    if (a1.rowCount + a2.rowCount + a3.rowCount) await pool.query("INSERT INTO settings(key,value) VALUES('mig_cards_1111b','1')");
+  }
   // 1회 적용: 오안(루카) 팀장카드는 운행일지 법인카드와 같은 카드 → 부서팀장 일지에서 제외 (대표 지시 2026-11-11)
   const done = await pool.query("SELECT 1 FROM settings WHERE key='mig_oan_no_team'");
   if (!done.rows.length) {

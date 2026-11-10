@@ -1206,12 +1206,14 @@ async function granterAdmin() {
     <div class="row"><label class="inline">연동 시작일 <input type="date" name="g_from" value="${esc(g.from)}" style="width:auto"></label><button class="btn sm" id="g-from">시작일 저장</button>
       <button class="btn primary" id="g-sync" ${g.enabled ? '' : 'disabled'}>지금 동기화</button></div>
     <div class="note">최근 동기화: ${L ? `${esc(new Date(L.at).toLocaleString('ko-KR'))} · ${L.ok ? `조회 ${L.fetched}건 · 신규 ${L.inserted} · 수기입력 흡수 ${L.merged} · 변경 ${L.updated} · 삭제 ${L.removed} · 직원 미연결 ${L.skipped_unmapped}건` : '실패: ' + esc(L.error)}` : '없음'}</div>
+    <div class="row"><span class="note">연동 안 함 카드 ${g.cards.filter((c) => c.book === 'off').length}장 ${state.showOffCards ? '표시 중' : '숨김'}</span><button class="btn sm" id="g-off">${state.showOffCards ? '숨기기' : '보기'}</button></div>
     <div class="table-wrap"><table><thead><tr><th>그랜터 카드</th><th>카드번호</th><th>연결 직원</th><th>기록 위치</th><th>일지 표시명 (별도 항목)</th><th class="n">적재</th><th class="n">목적 미선택</th><th></th></tr></thead><tbody>
-    ${g.cards.map((c) => `<tr data-card="${esc(c.card_id)}"><td class="wrap">${esc(c.name)}</td><td>${esc(c.number || '')}</td>
+    ${g.cards.filter((c) => state.showOffCards || c.book !== 'off').map((c) => `<tr data-card="${esc(c.card_id)}"><td class="wrap">${esc(c.name)}</td><td>${esc(c.number || '')}</td>
       <td><select name="uid"><option value="">자동${c.auto_user ? ': ' + esc(c.auto_user) : ' (매칭 없음)'}</option>${users.filter((u) => u.active || u.id === c.user_id).map((u) => `<option value="${u.id}" ${u.id === c.user_id ? 'selected' : ''}>${esc(u.name)}${u.nickname ? ' (' + esc(u.nickname) + ')' : ''}</option>`).join('')}</select></td>
       <td><select name="book">${Object.entries(BOOK).map(([k, v]) => `<option value="${k}" ${k === c.book ? 'selected' : ''}>${k === 'auto' && c.auto_book ? '자동: ' + (c.auto_book === 'team' ? '부서팀장 일지' : '차량운행일지') : v}</option>`).join('')}</select></td>
       <td><input name="label" value="${esc(c.label || '')}" placeholder="예: 삼성카드 전용"></td>
       <td class="n">${c.n}</td><td class="n">${c.n_unset}</td><td><button class="btn sm" data-csave>저장</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">아직 불러온 카드가 없습니다. 동기화 후 표시됩니다.</td></tr>'}</tbody></table></div>`;
+  $('#g-off').onclick = () => { state.showOffCards = !state.showOffCards; granterAdmin(); };
   $('#g-from').onclick = async () => { try { await api('/api/admin/granter/from', { method: 'PUT', body: { from: $('[name=g_from]', box).value } }); toast('시작일 저장'); granterAdmin(); } catch (e) { fail(e); } };
   $('#g-sync').onclick = async (ev) => {
     ev.target.disabled = true; ev.target.textContent = '동기화 중…';
