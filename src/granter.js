@@ -87,6 +87,17 @@ async function sync({ reason = 'auto' } = {}) {
   const started = new Date();
   const out = { ok: true, reason, from: await syncFrom(), to: kstToday(), fetched: 0, inserted: 0, merged: 0, updated: 0, removed: 0, skipped_unmapped: 0, skipped_off: 0 };
   try {
+    // 그랜터에 등록된 카드 목록 (사용내역이 아직 없는 카드도 관리 화면에 표시)
+    try {
+      const assets = await call('/assets', { assetType: 'CARD' });
+      for (const a of (Array.isArray(assets) ? assets : assets.data || [])) {
+        if (a.isActive === false || a.isHidden) continue;
+        await q(`INSERT INTO granter_cards(card_id,name,number,owner_emails,last_seen) VALUES($1,$2,$3,'',now())
+          ON CONFLICT (card_id) DO UPDATE SET name=EXCLUDED.name, number=EXCLUDED.number, last_seen=now()`,
+        [String(a.id), a.nickname || a.name || '', a.number || '']);
+      }
+      out.cards = (Array.isArray(assets) ? assets : assets.data || []).length;
+    } catch (e) { out.cards_error = e.message; }
     // 최대 366일 단위로 조회
     const tickets = [];
     let s = out.from;
