@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const { q, pool, migrate } = require('./db');
 const ext = require('./external');
+const granter = require('./granter');
 const { bootstrap } = require('./seed');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -475,7 +476,9 @@ app.post('/api/day', auth, dayUpload.any(), wrap(async (req, res) => {
   if (book === 'team') { b.legs = []; (b.expenses || []).forEach((e) => (e.card_type = 'corporate')); }
   const legs = (b.legs || []).filter((l) => str(l.start_name) || str(l.end_name) || num(l.distance_km));
   const exps = (b.expenses || []).filter((e) => int(e.amount));
-  if (!legs.length && !exps.length) throw bad('운행 구간 또는 카드 사용 내역을 1건 이상 입력하세요');
+  // 그랜터 연동 법인카드 건: 사용 목적·상세내용·영수증만 저장
+  const cls = (b.classify || []).filter((x) => int(x.id));
+  if (!legs.length && !exps.length && !cls.length) throw bad('운행 구간 또는 카드 사용 내역을 1건 이상 입력하세요');
   const tripVals = [];
   for (const l of legs) {
     tripVals.push(await tripValues(req, { ...l, trip_date: b.date, vehicle_id: b.vehicle_id, fuel_price_won: b.fuel_price_won, efficiency_km_l: b.efficiency_km_l }, uid));
@@ -487,6 +490,18 @@ app.post('/api/day', auth, dayUpload.any(), wrap(async (req, res) => {
     await client.query('BEGIN');
     const ph = (n) => Array.from({ length: n }, (_, i) => '$' + (i + 1)).join(',');
     for (const v of tripVals) { await client.query(`INSERT INTO trips(${TRIP_COLS}) VALUES(${ph(v.length)})`, v); out.trips++; }
+    for (const x of cls) {
+      const r = await client.query(
+        `UPDATE expenses SET category=$1, purpose=$2, vehicle_id=COALESCE($3, vehicle_id) WHERE id=$4 AND user_id=$5 AND source='granter' RETURNING id`,
+        [str(x.category) || granter.UNSET, str(x.purpose), b.vehicle_id ? int(b.vehicle_id) : null, int(x.id), uid]);
+      if (!r.rows[0]) continue;
+      out.expenses++;
+      for (const f of (req.files || []).filter((y) => y.fieldname === 'photo_' + x.key)) {
+        await client.query('INSERT INTO photos(owner_type,owner_id,filename,mime,size,data,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)',
+          ['expense', r.rows[0].id, Buffer.from(f.originalname, 'latin1').toString('utf8'), f.mimetype, f.size, f.buffer, req.user.id]);
+        out.photos++;
+      }
+    }
     for (const { v, key } of expVals) {
       const r = await client.query('INSERT INTO expenses(user_id,vehicle_id,expense_date,card_type,category,purpose,amount,memo,book) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id', [...v, book]);
       out.expenses++;
@@ -499,6 +514,25 @@ app.post('/api/day', auth, dayUpload.any(), wrap(async (req, res) => {
     await client.query('COMMIT');
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
   res.json(out);
+}));
+
+// ---------- 그랜터 연동 법인카드 ----------
+// 운행일지 등록 화면: 해당 날짜의 본인 연동 법인카드 사용내역
+app.get('/api/day-cards', auth, wrap(async (req, res) => {
+  if (!isDate(req.query.date)) throw bad('날짜 오류');
+  const uid = targetUserId(req, req.query.user_id);
+  const r = await q(`SELECT * FROM expenses WHERE user_id=$1 AND expense_date=$2 AND source='granter' AND book='drive' ORDER BY pay_time NULLS LAST, id`, [uid, req.query.date]);
+  const photos = await photoList('expense', r.rows.map((x) => x.id));
+  res.json({ enabled: granter.enabled(), rows: r.rows.map((x) => ({ ...x, photos: photos[x.id] || [] })) });
+}));
+// 사용 목적·상세내용만 저장 (금액·일자는 그랜터 기준으로 고정)
+app.put('/api/expenses/:id/classify', auth, upload.array('photos', 10), wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM expenses WHERE id=$1', [int(req.params.id)])).rows[0];
+  if (!cur) throw bad('기록 없음', 404);
+  assertOwner(req, cur.user_id);
+  await q('UPDATE expenses SET category=$1, purpose=$2 WHERE id=$3', [str(req.body.category) || granter.UNSET, str(req.body.purpose), cur.id]);
+  await savePhotos('expense', cur.id, req.files, req.user.id);
+  res.json({ ok: true });
 }));
 
 // ---------- 카드 사용 내역 ----------
@@ -534,6 +568,7 @@ app.put('/api/expenses/:id', auth, upload.array('photos', 10), wrap(async (req, 
   if (!cur) throw bad('기록 없음', 404);
   assertOwner(req, cur.user_id);
   if (cur.book === 'team') req.body.card_type = 'corporate';
+  if (cur.source === 'granter') Object.assign(req.body, { card_type: 'corporate', amount: cur.amount, expense_date: cur.expense_date });
   const v = expenseValues(req.body, cur.user_id);
   await q('UPDATE expenses SET user_id=$1,vehicle_id=$2,expense_date=$3,card_type=$4,category=$5,purpose=$6,amount=$7,memo=$8 WHERE id=$9',
     [...v, cur.id]);
@@ -544,6 +579,7 @@ app.delete('/api/expenses/:id', auth, wrap(async (req, res) => {
   const cur = (await q('SELECT * FROM expenses WHERE id=$1', [int(req.params.id)])).rows[0];
   if (!cur) throw bad('기록 없음', 404);
   assertOwner(req, cur.user_id);
+  if (cur.source === 'granter') throw bad('그랜터 연동 건은 삭제할 수 없습니다. 취소·제외는 그랜터에서 처리하면 자동 반영됩니다');
   await q("DELETE FROM photos WHERE owner_type='expense' AND owner_id=$1", [cur.id]);
   await q('DELETE FROM expenses WHERE id=$1', [cur.id]);
   res.json({ ok: true });
@@ -775,7 +811,27 @@ app.get('/api/admin/opinet-test', auth, admin, wrap(async (req, res) => {
 }));
 app.get('/api/public-config', auth, wrap(async (req, res) => {
   const r = await q("SELECT value FROM settings WHERE key='kakao_js_key'");
-  res.json({ kakao_js_key: process.env.KAKAO_JS_KEY || r.rows[0]?.value || null });
+  res.json({ kakao_js_key: process.env.KAKAO_JS_KEY || r.rows[0]?.value || null, granter: granter.enabled() });
+}));
+// 그랜터 연동 관리 (관리자)
+app.get('/api/admin/granter', auth, admin, wrap(async (req, res) => {
+  const cards = (await q(`SELECT c.*, (SELECT count(*)::int FROM expenses e WHERE e.ext_card=c.card_id) AS n,
+      (SELECT count(*)::int FROM expenses e WHERE e.ext_card=c.card_id AND e.category=$1) AS n_unset
+    FROM granter_cards c ORDER BY c.name`, [granter.UNSET])).rows;
+  res.json({ ...(await granter.status()), cards });
+}));
+app.put('/api/admin/granter/cards/:id', auth, admin, wrap(async (req, res) => {
+  const book = ['auto', 'drive', 'team', 'off'].includes(req.body.book) ? req.body.book : 'auto';
+  await q('UPDATE granter_cards SET user_id=$1, book=$2 WHERE card_id=$3', [req.body.user_id ? int(req.body.user_id) : null, book, String(req.params.id)]);
+  res.json({ ok: true });
+}));
+app.put('/api/admin/granter/from', auth, admin, wrap(async (req, res) => {
+  if (!isDate(req.body.from)) throw bad('날짜 형식 오류');
+  await granter.setSetting('granter_sync_from', req.body.from);
+  res.json({ ok: true });
+}));
+app.post('/api/admin/granter/sync', auth, admin, wrap(async (req, res) => {
+  res.json(await granter.sync({ reason: 'manual' }));
 }));
 
 // ---------- 기존 엑셀 이관 데이터 적재 (관리자) ----------
@@ -851,4 +907,5 @@ app.use((err, req, res, next) => {
   }
   await bootstrap();
   app.listen(PORT, () => console.log(`[frihet-car-log] listening on :${PORT}`));
+  granter.start();
 })().catch((e) => { console.error(e); process.exit(1); });

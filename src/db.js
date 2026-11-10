@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS fuel_prices (
 
 async function migrate() {
   await pool.query(SCHEMA);
-  // 카드 사용 항목명 통일 (선택형 항목: 식대·주유비·통행료·주차비·매장물품구매·숙박비·기타)
+  // 카드 사용 항목명 통일 (선택형 항목: 식대·주유비·통행료·주차비·업무물품구매·숙박비·교통비·기타)
   // 카드 사용 장부 구분: drive=차량운행일지, team=부서팀장 법인카드 일지
   await pool.query("ALTER TABLE expenses ADD COLUMN IF NOT EXISTS book TEXT NOT NULL DEFAULT 'drive'");
   // 부서팀장 법인카드 일지 사용자 지정 (예: 총무카드). 비어 있으면 직책 '팀장' 기준
@@ -144,6 +144,23 @@ async function migrate() {
   await pool.query("CREATE INDEX IF NOT EXISTS expenses_book_date ON expenses(book, expense_date)");
   await pool.query("UPDATE expenses SET category='주유비' WHERE category='주유'");
   await pool.query("UPDATE expenses SET category='주차비' WHERE category='주차'");
+  // 사용 목적 항목 변경: 매장물품구매 → 업무물품구매
+  await pool.query("UPDATE expenses SET category='업무물품구매' WHERE category='매장물품구매'");
+  // 그랜터 법인카드 자동 연동
+  await pool.query('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS ext_id TEXT');
+  await pool.query('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS ext_card TEXT');
+  await pool.query('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS merchant TEXT');
+  await pool.query('ALTER TABLE expenses ADD COLUMN IF NOT EXISTS pay_time TEXT');
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS expenses_ext_id ON expenses(ext_id) WHERE ext_id IS NOT NULL');
+  await pool.query(`CREATE TABLE IF NOT EXISTS granter_cards (
+    card_id TEXT PRIMARY KEY,
+    name TEXT,
+    number TEXT,
+    owner_emails TEXT,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    book TEXT NOT NULL DEFAULT 'auto',
+    last_seen TIMESTAMPTZ
+  )`);
 }
 
 module.exports = { pool, q, migrate };

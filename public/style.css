@@ -192,3 +192,13 @@ h3.sec { font-size: 15px; margin: 10px 0 0; padding-top: 12px; border-top: 1px s
 .bar-row.pick { border-radius: 6px; }
 .kpi.pick .l::after, .kpi[data-vlv] .l::after { content: ' ›'; opacity: .6; }
 .kpi.pick:hover .v, .kpi[data-vlv]:hover .v { text-decoration: underline; text-underline-offset: 4px; }
+/* 그랜터 연동 법인카드 건 */
+.g-row { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; background: #fff; display: grid; gap: 6px; }
+.exp-item > .g-row { border: 0; padding: 0; margin: 0; }
+.g-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.g-head .g-merch { flex: 1; min-width: 120px; }
+.g-head .g-amt { white-space: nowrap; }
+.g-in { display: grid; grid-template-columns: 150px 1fr 1.4fr auto; gap: 6px; align-items: center; }
+.g-in input.hidden + input { grid-column: 2 / 4; }
+.g-ph { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 640px) { .g-in { grid-template-columns: 1fr 1fr; } .g-in input.hidden + input { grid-column: auto; } }
