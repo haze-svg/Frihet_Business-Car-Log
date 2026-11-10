@@ -201,6 +201,20 @@ async function migrate() {
     await pool.query("DELETE FROM expenses WHERE source='granter' AND ext_card IN (SELECT card_id FROM granter_cards WHERE book='off')");
     if (a1.rowCount + a2.rowCount + a3.rowCount) await pool.query("INSERT INTO settings(key,value) VALUES('mig_cards_1111b','1')");
   }
+  // 공용 부서카드 열람 지정 (이 직원이 볼 수 있는 부서카드 계정 id)
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS share_team INTEGER');
+  // 1회 적용 (대표 지시 2026-11-11 04:36): 마케팅팀 부서카드(2977) → 부서팀장 일지 '마케팅팀' 항목, 이수정·윤효근·송영민 공동 사용
+  //  - '마케팅팀'은 로그인 불가 부서 계정 (비밀번호 없음), 내역 소유자로만 사용
+  const doneM = await pool.query("SELECT 1 FROM settings WHERE key='mig_marketing_team'");
+  if (!doneM.rows.length) {
+    const t = await pool.query(`INSERT INTO users(email,name,nickname,department,position,role,password_hash,must_change_password,team_card)
+      VALUES('team-marketing@cafefrihet.com','마케팅팀','부서카드','브랜드마케팅팀','부서카드','user','!',false,'부서카드')
+      ON CONFLICT (email) DO UPDATE SET team_card='부서카드' RETURNING id`);
+    const tid = t.rows[0].id;
+    await pool.query("UPDATE granter_cards SET user_id=$1, book='team', label=NULL WHERE number LIKE '%2977'", [tid]);
+    await pool.query("UPDATE users SET share_team=$1 WHERE name IN ('이수정','윤효근','송영민')", [tid]);
+    await pool.query("INSERT INTO settings(key,value) VALUES('mig_marketing_team','1')");
+  }
   // 1회 적용: 오안(루카) 팀장카드는 운행일지 법인카드와 같은 카드 → 부서팀장 일지에서 제외 (대표 지시 2026-11-11)
   const done = await pool.query("SELECT 1 FROM settings WHERE key='mig_oan_no_team'");
   if (!done.rows.length) {
