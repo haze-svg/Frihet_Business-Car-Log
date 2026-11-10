@@ -836,7 +836,7 @@ app.get('/api/admin/granter', auth, admin, wrap(async (req, res) => {
       (SELECT u.name || COALESCE('(' || u.nickname || ')', '') FROM expenses e JOIN users u ON u.id=e.user_id WHERE e.ext_card=c.card_id GROUP BY u.id ORDER BY count(*) DESC LIMIT 1) AS auto_user,
       (SELECT e.book FROM expenses e WHERE e.ext_card=c.card_id GROUP BY e.book ORDER BY count(*) DESC LIMIT 1) AS auto_book,
       (SELECT count(*)::int FROM expenses e WHERE e.ext_card=c.card_id AND e.category=$1) AS n_unset
-    FROM granter_cards c ORDER BY c.name`, [granter.UNSET])).rows;
+    FROM granter_cards c ORDER BY (c.book='off'), c.name`, [granter.UNSET])).rows;
   res.json({ ...(await granter.status()), cards });
 }));
 app.put('/api/admin/granter/cards/:id', auth, admin, wrap(async (req, res) => {

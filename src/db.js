@@ -170,6 +170,16 @@ async function migrate() {
       WHERE number LIKE '%3188' OR number LIKE '%2109'`);
     if (r.rowCount) await pool.query("INSERT INTO settings(key,value) VALUES('mig_samsung_silver','1')");
   }
+  // 1회 적용 (대표 지시 2026-11-11): KB국민 MYBIZ(9902)·본사(3959) 카드 연동 제외,
+  // 온라인결제 카드(8896) → 백은하(실버) 부서팀장 일지, 백은하 일지 명칭 '온라인결제전용'
+  const doneO = await pool.query("SELECT 1 FROM settings WHERE key='mig_online_silver'");
+  if (!doneO.rows.length) {
+    const off = await pool.query("UPDATE granter_cards SET book='off', user_id=NULL, label=NULL WHERE number LIKE '%9902' OR number LIKE '%3959'");
+    const on = await pool.query(`UPDATE granter_cards SET user_id=(SELECT id FROM users WHERE name='백은하' AND nickname='실버' LIMIT 1), book='team', label=NULL,
+      name=CASE WHEN name LIKE '실버\_%' THEN name ELSE '실버_' || name END WHERE number LIKE '%8896'`);
+    await pool.query("UPDATE users SET team_card='온라인결제전용' WHERE name='백은하' AND nickname='실버'");
+    if (off.rowCount || on.rowCount) await pool.query("INSERT INTO settings(key,value) VALUES('mig_online_silver','1')");
+  }
   // 1회 적용: 오안(루카) 팀장카드는 운행일지 법인카드와 같은 카드 → 부서팀장 일지에서 제외 (대표 지시 2026-11-11)
   const done = await pool.query("SELECT 1 FROM settings WHERE key='mig_oan_no_team'");
   if (!done.rows.length) {
