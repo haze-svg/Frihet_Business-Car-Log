@@ -176,7 +176,7 @@ async function render() {
     if (page === 'trips' && kind === 'u' && id) {
       state.tripUser = isAdmin() ? (await api('/api/users?all=1')).find((u) => u.id == id) : state.me;
     }
-    if (page === 'teamcard' && kind === 'u' && id) state.cardUser = (await api('/api/leads')).find((u) => u.id == id && String(u.card_id || '') === String(sub || '')) || null;
+    if (page === 'teamcard' && kind === 'u' && id) state.cardUser = (await api('/api/leads')).find((u) => u.id == id && String(u.card_id || '') === decodeURIComponent(sub || '')) || null;
     if (page === 'maintenance' && kind === 'v' && id) state.vehicle = (await api('/api/vehicles?scope=all')).find((v) => v.id == id) || null;
   } catch (e) { fail(e); }
   // 관리자 전용 화면은 관리자만 (서버에서도 차단)
@@ -710,7 +710,7 @@ async function pageTeamCard() {
   if (!state.cardUser) {
     leads ||= await api('/api/leads');
     main.innerHTML = `<div class="page-head"><h1>부서팀장 법인카드 일지</h1></div><p class="note">카드 사용자를 선택하세요. (직책에 '팀장'이 포함된 직원 + 직원·차량 관리에서 카드 구분을 지정한 직원)</p>
-      <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}${u.card_id ? '/' + esc(u.card_id) : ''}"><div class="row" style="justify-content:space-between"><div class="t">${userLabel(u)}</div><span class="badge corp">${esc(u.card_label)}</span></div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
+      <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}${u.card_id ? '/' + esc(encodeURIComponent(u.card_id)) : ''}"><div class="row" style="justify-content:space-between"><div class="t">${userLabel(u)}</div><span class="badge corp">${esc(u.card_label)}</span></div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
     $$('[data-uid]', main).forEach((el) => (el.onclick = () => go('teamcard/u/' + el.dataset.uid)));
     return;
   }

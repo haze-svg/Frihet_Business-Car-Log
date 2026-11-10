@@ -163,6 +163,13 @@ async function migrate() {
   )`);
   // 부서팀장 법인카드 일지에 별도 항목으로 보일 이름 (예: 백은하(실버) - 삼성카드 전용)
   await pool.query('ALTER TABLE granter_cards ADD COLUMN IF NOT EXISTS label TEXT');
+  // 1회 적용: 삼성카드 CORPORATE 2장(3188·2109) → 백은하(실버) 부서팀장 일지 '삼성카드 전용' 항목 (대표 지시 2026-11-11)
+  const doneS = await pool.query("SELECT 1 FROM settings WHERE key='mig_samsung_silver'");
+  if (!doneS.rows.length) {
+    const r = await pool.query(`UPDATE granter_cards SET user_id=(SELECT id FROM users WHERE name='백은하' AND nickname='실버' LIMIT 1), book='team', label='삼성카드 전용'
+      WHERE number LIKE '%3188' OR number LIKE '%2109'`);
+    if (r.rowCount) await pool.query("INSERT INTO settings(key,value) VALUES('mig_samsung_silver','1')");
+  }
   // 1회 적용: 오안(루카) 팀장카드는 운행일지 법인카드와 같은 카드 → 부서팀장 일지에서 제외 (대표 지시 2026-11-11)
   const done = await pool.query("SELECT 1 FROM settings WHERE key='mig_oan_no_team'");
   if (!done.rows.length) {

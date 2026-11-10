@@ -545,7 +545,7 @@ app.get('/api/expenses', auth, wrap(async (req, res) => {
   let cardCond = '';
   const params = [uid, from, to, req.query.book === 'team' ? 'team' : 'drive'];
   if (req.query.card === 'main') cardCond = `AND (e.ext_card IS NULL OR e.ext_card NOT IN (SELECT card_id FROM granter_cards WHERE book='team' AND label IS NOT NULL AND label<>''))`;
-  else if (req.query.card) { params.push(String(req.query.card)); cardCond = 'AND e.ext_card=$5'; }
+  else if (req.query.card) { params.push(String(req.query.card)); cardCond = `AND e.ext_card IN (SELECT card_id FROM granter_cards WHERE book='team' AND label=$5)`; }
   const r = await q(
     `SELECT e.*, v.plate FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id
      WHERE e.user_id=$1 AND e.expense_date BETWEEN $2 AND $3 AND e.book=$4 ${cardCond} ORDER BY e.expense_date DESC, e.id DESC`, params
@@ -596,7 +596,8 @@ app.delete('/api/expenses/:id', auth, wrap(async (req, res) => {
 app.get('/api/leads', auth, wrap(async (req, res) => {
   const r = await q(`SELECT id,name,nickname,department,position,active,team_card FROM users WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') AND COALESCE(team_card,'')<>'사용안함' ${isAdmin(req) ? '' : 'AND id=$1'} ORDER BY department NULLS LAST, name`, isAdmin(req) ? [] : [req.user.id]);
   // 별도 항목으로 지정한 그랜터 카드 (예: 삼성카드 전용)
-  const c = await q(`SELECT g.card_id, g.label, u.id,u.name,u.nickname,u.department,u.position,u.active,u.team_card FROM granter_cards g JOIN users u ON u.id=g.user_id
+  // 같은 직원·같은 표시명의 카드 여러 장은 한 항목으로 묶음 (card_id = 표시명)
+  const c = await q(`SELECT DISTINCT g.label AS card_id, g.label, u.id,u.name,u.nickname,u.department,u.position,u.active,u.team_card FROM granter_cards g JOIN users u ON u.id=g.user_id
     WHERE g.book='team' AND g.label IS NOT NULL AND g.label<>'' ${isAdmin(req) ? '' : 'AND u.id=$1'} ORDER BY u.name, g.label`, isAdmin(req) ? [] : [req.user.id]);
   const out = [];
   for (const u of r.rows) {
