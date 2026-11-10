@@ -8,7 +8,7 @@ const FUEL = { gasoline: '휘발유', diesel: '경유', lpg: 'LPG', hybrid: '하
 const OWN = { corporate: '법인차량', personal: '개인차량' };
 const CARD = { corporate: '법인카드', personal: '개인카드', receipt: '증빙(이관)' };
 const EXP_CATS = ['식대', '주유비', '통행료', '주차비', '업무물품구매', '숙박비', '교통비', '기타'];
-// 부서팀장 법인카드: 기본 항목 + 부서회식
+// 부서관리 법인카드: 기본 항목 + 부서회식
 const TEAM_CATS = ['식대', '부서회식', '주유비', '통행료', '주차비', '업무물품구매', '숙박비', '교통비', '기타'];
 const UNSET = '미선택';
 // ---- 그랜터 연동 법인카드 건: 카드내역(가맹점·시각·금액)은 고정, 사용 목적·상세내용·영수증만 입력 ----
@@ -692,7 +692,7 @@ async function dayForm(u, vehicles) {
   };
 }
 
-// ========== 부서팀장 법인카드 일지 ==========
+// ========== 부서관리 법인카드 일지 ==========
 function expItemHtml(r) {
   if (r.source === 'granter') return `<div class="exp-item">${gRowHtml(r, TEAM_CATS)}</div>`;
   return `<div class="exp-item"><div class="row" style="justify-content:space-between"><span><span class="badge corp">${esc(r.category)}</span> ${esc(r.purpose || '')}</span><b>${won(r.amount)}원</b></div>
@@ -709,7 +709,7 @@ async function pageTeamCard() {
   }
   if (!state.cardUser) {
     leads ||= await api('/api/leads');
-    main.innerHTML = `<div class="page-head"><h1>부서팀장 법인카드 일지</h1></div><p class="note">카드 사용자를 선택하세요. (직책에 '팀장'이 포함된 직원 + 직원·차량 관리에서 카드 구분을 지정한 직원)</p>
+    main.innerHTML = `<div class="page-head"><h1>부서관리 법인카드 일지</h1></div><p class="note">카드 사용자를 선택하세요. (직책에 '팀장'이 포함된 직원 + 직원·차량 관리에서 카드 구분을 지정한 직원)</p>
       <div class="cards">${leads.map((u) => `<div class="card pick" data-uid="${u.id}${u.card_id ? '/' + esc(encodeURIComponent(u.card_id)) : ''}"><div class="row" style="justify-content:space-between"><div class="t">${userLabel(u)}</div><span class="badge corp">${esc(u.card_label)}</span></div><div class="s">${esc(u.department || '')} · ${esc(u.position || '')}</div></div>`).join('')}</div>`;
     $$('[data-uid]', main).forEach((el) => (el.onclick = () => go('teamcard/u/' + el.dataset.uid)));
     return;
@@ -720,7 +720,7 @@ async function pageTeamCard() {
   const total = rows.reduce((a, r) => a + r.amount, 0), nPh = rows.reduce((a, r) => a + r.photos.length, 0);
   const days = {}; rows.forEach((r) => (days[r.expense_date.slice(0, 10)] ||= []).push(r));
   const cats = {}; rows.forEach((r) => (cats[r.category] = (cats[r.category] || 0) + r.amount));
-  main.innerHTML = `<div class="crumb">${isAdmin() || leads?.length > 1 || u.card_id ? `${backBtn('teamcard')} <a id="back">부서팀장 법인카드 일지</a> / ` : ''}${userLabel(u)}</div>
+  main.innerHTML = `<div class="crumb">${isAdmin() || leads?.length > 1 || u.card_id ? `${backBtn('teamcard')} <a id="back">부서관리 법인카드 일지</a> / ` : ''}${userLabel(u)}</div>
     <div class="page-head"><h1>${userLabel(u)} 법인카드 일지 <span class="badge corp">${esc(u.card_label)}</span></h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
     <div class="kpis"><div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
       <div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
@@ -736,7 +736,7 @@ async function pageTeamCard() {
   $$('[data-edit]', main).forEach((b) => (b.onclick = () => expenseForm(u, [], rows.find((x) => x.id == b.dataset.edit), { book: 'team', after: pageTeamCard })));
 }
 function teamForm(u) {
-  const c = openModal(`<div class="row" style="justify-content:space-between"><h2 style="margin:0">부서팀장 법인카드 사용 등록 · ${userLabel(u)}</h2><button class="btn" data-close>닫기</button></div>
+  const c = openModal(`<div class="row" style="justify-content:space-between"><h2 style="margin:0">부서관리 법인카드 사용 등록 · ${userLabel(u)}</h2><button class="btn" data-close>닫기</button></div>
     <div class="grid3"><label>사용일자<input type="date" name="date" value="${today()}"></label></div>
     <div class="card-col corp"><div class="col-title corp">법인카드 사용 내역</div><div class="exp-rows" data-card="corporate"></div><button class="btn sm" id="add-row">+ 사용 건 추가</button></div>
     <div class="day-sum" id="team-sum" style="grid-template-columns:repeat(2,1fr)"></div>
@@ -789,24 +789,24 @@ async function pageCardAdmin() {
   const tot = d.users.reduce((a, u) => a + u.amount, 0), cnt = d.users.reduce((a, u) => a + u.cnt, 0);
   const drv = d.users.reduce((a, u) => a + (u.drive_amount || 0), 0), team = d.users.reduce((a, u) => a + (u.team_amount || 0), 0);
   const maxM = Math.max(1, ...d.monthly.map((m) => m.amount));
-  const BOOK = { all: '전체', drive: '차량운행일지 법인카드', team: '부서팀장 법인카드' };
+  const BOOK = { all: '전체', drive: '차량운행일지 법인카드', team: '부서관리 법인카드' };
   main.innerHTML = `<div class="page-head"><h1>법인카드 사용 관리</h1><div class="grow"></div>${rangeControls(pageCardAdmin)}</div>
     <div class="row" style="margin-bottom:12px">${Object.entries(BOOK).map(([k, l]) => `<button class="btn ${state.cardBook === k ? 'primary' : ''}" data-book="${k}">${l}</button>`).join('')}</div>
     <div class="kpis"><div class="kpi pick" ${dd(BOOK[state.cardBook] + ' 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}><div class="l">${BOOK[state.cardBook]} 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div><div class="note">${cnt}건</div></div>
       <div class="kpi pick" ${dd('차량운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive' })}><div class="l">차량운행일지 법인카드</div><div class="v">${won(drv)}원</div></div>
-      <div class="kpi pick" ${dd('부서팀장 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team' })}><div class="l">부서팀장 법인카드</div><div class="v">${won(team)}원</div></div></div>
+      <div class="kpi pick" ${dd('부서관리 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team' })}><div class="l">부서관리 법인카드</div><div class="v">${won(team)}원</div></div></div>
     <p class="note">차량운행일지 법인카드 수치는 통합 합계관리의 "법인카드"와 같은 기준(운행일지에 등록된 법인카드)입니다.</p>
     <h2>직원별</h2>
-    <div class="table-wrap"><table><thead><tr><th>부서</th><th>직원</th><th>직책</th><th class="n">건수</th><th class="n">운행일지 법인카드</th><th class="n">팀장 법인카드</th><th class="n">합계</th><th class="n">영수증</th></tr></thead>
+    <div class="table-wrap"><table><thead><tr><th>부서</th><th>직원</th><th>직책</th><th class="n">건수</th><th class="n">운행일지 법인카드</th><th class="n">부서관리 법인카드</th><th class="n">합계</th><th class="n">영수증</th></tr></thead>
       <tbody>${d.users.map((u) => `<tr class="clickable" data-uid="${u.id}" data-lead="${u.team_amount ? 1 : 0}"><td>${esc(u.department || '')}</td><td>${userLabel(u)}${u.active ? '' : ' <span class="badge off">퇴사</span>'}</td><td>${esc(u.position || '')}</td>
-        <td class="n">${ddLink(u.cnt, u.name + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id })}</td><td class="n">${ddLink(won(u.drive_amount), u.name + ' 운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive', user_ids: u.id })}</td><td class="n">${ddLink(won(u.team_amount), u.name + ' 팀장 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team', user_ids: u.id })}</td><td class="n"><b>${ddLink(won(u.amount), u.name + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id })}</b></td><td class="n">${ddLink(u.photos, u.name + ' 영수증 있는 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id, has_photo: 1 })}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">데이터 없음</td></tr>'}</tbody>
-      <tfoot><tr><td colspan="3">합계</td><td class="n">${ddLink(cnt, '법인카드 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}</td><td class="n">${ddLink(won(drv), '차량운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive' })}</td><td class="n">${ddLink(won(team), '부서팀장 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team' })}</td><td class="n">${ddLink(won(tot), '법인카드 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}</td><td></td></tr></tfoot></table></div>
+        <td class="n">${ddLink(u.cnt, u.name + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id })}</td><td class="n">${ddLink(won(u.drive_amount), u.name + ' 운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive', user_ids: u.id })}</td><td class="n">${ddLink(won(u.team_amount), u.name + ' 부서관리 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team', user_ids: u.id })}</td><td class="n"><b>${ddLink(won(u.amount), u.name + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id })}</b></td><td class="n">${ddLink(u.photos, u.name + ' 영수증 있는 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, user_ids: u.id, has_photo: 1 })}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">데이터 없음</td></tr>'}</tbody>
+      <tfoot><tr><td colspan="3">합계</td><td class="n">${ddLink(cnt, '법인카드 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}</td><td class="n">${ddLink(won(drv), '차량운행일지 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'drive' })}</td><td class="n">${ddLink(won(team), '부서관리 법인카드', { kind: 'expenses', card_type: 'corporate', book: 'team' })}</td><td class="n">${ddLink(won(tot), '법인카드 전체', { kind: 'expenses', card_type: 'corporate', book: state.cardBook })}</td><td></td></tr></tfoot></table></div>
     <div class="grid2" style="margin-top:16px"><div class="card"><h2>항목별</h2><div class="table-wrap"><table><thead><tr><th>항목</th><th class="n">건수</th><th class="n">금액</th><th class="n">비중</th></tr></thead>
       <tbody>${d.categories.map((x) => `<tr class="clickable" ${dd('법인카드 · ' + x.category, { kind: 'expenses', card_type: 'corporate', book: state.cardBook, category: x.category })}><td>${esc(x.category)}</td><td class="n">${x.cnt}</td><td class="n">${won(x.amount)}</td><td class="n">${tot ? Math.round((x.amount / tot) * 100) : 0}%</td></tr>`).join('') || '<tr><td colspan="4" class="empty">-</td></tr>'}</tbody></table></div></div>
       <div class="card"><h2>월별</h2><div class="bars">${d.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 법인카드', { kind: 'expenses', card_type: 'corporate', book: state.cardBook, ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원</span></div>`).join('') || '<div class="empty">-</div>'}</div></div></div>
     <h2 style="margin-top:16px">최근 사용 내역 (최대 300건)</h2>
     <div class="table-wrap"><table><thead><tr><th>일자</th><th>장부</th><th>직원</th><th>항목</th><th>목적</th><th class="n">금액</th><th>영수증</th></tr></thead>
-      <tbody>${d.items.map((r) => `<tr><td>${r.expense_date}</td><td><span class="badge ${r.book === 'team' ? 'pers' : 'corp'}">${r.book === 'team' ? '팀장' : '운행일지'}</span></td><td>${userLabel(r)}</td><td>${esc(r.category)}</td><td class="wrap">${esc(r.purpose || '')}</td><td class="n">${won(r.amount)}</td><td>${thumbs(r.photos)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">-</td></tr>'}</tbody></table></div>`;
+      <tbody>${d.items.map((r) => `<tr><td>${r.expense_date}</td><td><span class="badge ${r.book === 'team' ? 'pers' : 'corp'}">${r.book === 'team' ? '부서관리' : '운행일지'}</span></td><td>${userLabel(r)}</td><td>${esc(r.category)}</td><td class="wrap">${esc(r.purpose || '')}</td><td class="n">${won(r.amount)}</td><td>${thumbs(r.photos)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">-</td></tr>'}</tbody></table></div>`;
   $$('[data-book]', main).forEach((b) => (b.onclick = () => { state.cardBook = b.dataset.book; pageCardAdmin(); }));
   $$('tr[data-uid]', main).forEach((tr) => (tr.onclick = () => {
     if (state.cardBook === 'team' || (state.cardBook === 'all' && tr.dataset.lead === '1')) go('teamcard/u/' + tr.dataset.uid);
@@ -836,7 +836,7 @@ function expenseForm(u, vehicles, rec, opt = {}) {
   if (gLock) return toast('그랜터 연동 법인카드 건은 목록에서 사용 목적만 선택하세요', true);
   const r = rec || { expense_date: today(), card_type: !team && state.granter ? 'personal' : 'corporate', category: '식대', amount: '' };
   const isStd = (team ? TEAM_CATS : EXP_CATS).includes(r.category) && r.category !== '기타' || r.category === '기타';
-  const c = openModal(`<h2>${rec ? '카드 사용 수정' : '카드 사용 등록'} · ${userLabel(u)}${team ? ' · 부서팀장 법인카드' : ''}</h2>
+  const c = openModal(`<h2>${rec ? '카드 사용 수정' : '카드 사용 등록'} · ${userLabel(u)}${team ? ' · 부서관리 법인카드' : ''}</h2>
     <div class="row${team ? ' hidden' : ''}">${(state.granter && !team && !(rec && rec.card_type === 'corporate') ? ['personal'] : ['corporate', 'personal']).map((t) => `<label class="inline" style="font-size:14px;color:var(--ink)"><input type="radio" name="card_type" value="${t}" style="width:auto" ${r.card_type === t ? 'checked' : ''}> ${CARD[t]}</label>`).join('')}</div>
     <div class="grid3"><label>사용일자<input type="date" name="expense_date" value="${String(r.expense_date).slice(0, 10)}"></label>
       <label>사용 목적<select name="category">${(team ? TEAM_CATS : EXP_CATS).map((x) => `<option ${x === (isStd ? r.category : '기타') ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
@@ -956,7 +956,7 @@ state.sumUsers = [];
 state.sumView = 'drive';
 function summaryTabs() {
   const canTeam = isAdmin() || state.me.is_holder;
-  return `<div class="sum-tabs"><button class="sum-tab ${state.sumView === 'drive' ? 'on' : ''}" data-sumview="drive">통합 합계관리</button>${canTeam ? `<button class="sum-tab ${state.sumView === 'team' ? 'on' : ''}" data-sumview="team">부서팀장 법인카드 합계관리</button>` : ''}</div>`;
+  return `<div class="sum-tabs"><button class="sum-tab ${state.sumView === 'drive' ? 'on' : ''}" data-sumview="drive">통합 합계관리</button>${canTeam ? `<button class="sum-tab ${state.sumView === 'team' ? 'on' : ''}" data-sumview="team">부서관리 법인카드 합계관리</button>` : ''}</div>`;
 }
 function bindSummaryTabs(main) { $$('[data-sumview]', main).forEach((b) => (b.onclick = () => { state.sumView = b.dataset.sumview; pageSummary(); })); }
 async function pageTeamSummary() {
@@ -966,18 +966,18 @@ async function pageTeamSummary() {
   const cats = [...TEAM_CATS.filter((c) => d.categories.includes(c)), ...d.categories.filter((c) => !TEAM_CATS.includes(c))];
   const maxM = Math.max(1, ...d.monthly.map((m) => m.amount));
   main.innerHTML = `<div class="page-head">${summaryTabs()}<div class="grow"></div>${rangeControls(pageSummary)}</div>
-    <div class="kpis"><div class="kpi pick" ${dd('부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div></div>
-      <div class="kpi pick" ${dd('부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}><div class="l">사용 건수</div><div class="v">${cnt}건</div></div>
+    <div class="kpis"><div class="kpi pick" ${dd('부서관리 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(tot)}원</div></div>
+      <div class="kpi pick" ${dd('부서관리 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}><div class="l">사용 건수</div><div class="v">${cnt}건</div></div>
       <div class="kpi pick" ${dd('부서회식', { kind: 'expenses', book: 'team', holders: 1, category: '부서회식' })}><div class="l">부서회식</div><div class="v">${won(d.users.reduce((a, u) => a + (u.by['부서회식'] || 0), 0))}원</div></div>
       <div class="kpi pick" ${dd('영수증 있는 법인카드 사용', { kind: 'expenses', book: 'team', holders: 1, has_photo: 1 })}><div class="l">영수증 사진</div><div class="v">${d.users.reduce((a, u) => a + u.photos, 0)}장</div></div></div>
     <h2>사용자별 비교</h2>
     <div class="table-wrap"><table><thead><tr><th>부서</th><th>사용자</th><th>구분</th><th class="n">건수</th>${cats.map((c) => `<th class="n">${esc(c)}</th>`).join('')}<th class="n">합계</th><th class="n">영수증</th></tr></thead>
       <tbody>${d.users.map((u) => `<tr class="clickable" data-uid="${u.id}"><td>${esc(u.department || '')}</td><td>${userLabel(u)}</td><td><span class="badge corp">${esc(u.card_label)}</span></td><td class="n">${ddLink(u.cnt, u.name + ' 법인카드', { kind: 'expenses', book: 'team', user_ids: u.id })}</td>
         ${cats.map((c) => `<td class="n">${ddLink(won(u.by[c] || 0), u.name + ' · ' + c, { kind: 'expenses', book: 'team', user_ids: u.id, category: c })}</td>`).join('')}<td class="n"><b>${ddLink(won(u.amount), u.name + ' 법인카드', { kind: 'expenses', book: 'team', user_ids: u.id })}</b></td><td class="n">${ddLink(u.photos, u.name + ' 영수증 있는 사용', { kind: 'expenses', book: 'team', user_ids: u.id, has_photo: 1 })}</td></tr>`).join('') || `<tr><td colspan="${cats.length + 6}" class="empty">데이터 없음</td></tr>`}</tbody>
-      <tfoot><tr><td colspan="3">합계</td><td class="n">${ddLink(cnt, '부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td>${cats.map((c) => `<td class="n">${ddLink(won(d.users.reduce((a, u) => a + (u.by[c] || 0), 0)), '부서팀장 법인카드 · ' + c, { kind: 'expenses', book: 'team', holders: 1, category: c })}</td>`).join('')}<td class="n">${ddLink(won(tot), '부서팀장 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td><td></td></tr></tfoot></table></div>
+      <tfoot><tr><td colspan="3">합계</td><td class="n">${ddLink(cnt, '부서관리 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td>${cats.map((c) => `<td class="n">${ddLink(won(d.users.reduce((a, u) => a + (u.by[c] || 0), 0)), '부서관리 법인카드 · ' + c, { kind: 'expenses', book: 'team', holders: 1, category: c })}</td>`).join('')}<td class="n">${ddLink(won(tot), '부서관리 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td><td></td></tr></tfoot></table></div>
     <p class="note">숫자를 누르면 해당 내역이 열리고, 이름을 누르면 해당 사용자의 법인카드 일지로 이동합니다.</p>
     <h2 style="margin-top:20px">월별 추이</h2>
-    <div class="card"><div class="bars">${d.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 부서팀장 법인카드', { kind: 'expenses', book: 'team', holders: 1, ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원 · ${m.cnt}건</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>`;
+    <div class="card"><div class="bars">${d.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 부서관리 법인카드', { kind: 'expenses', book: 'team', holders: 1, ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원 · ${m.cnt}건</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>`;
   bindSummaryTabs(main);
   $$('tr[data-uid]', main).forEach((tr) => (tr.onclick = () => go('teamcard/u/' + tr.dataset.uid)));
 }
@@ -1102,7 +1102,7 @@ function userForm(u, models, done = pageStaff) {
       <label>직책<input name="position" value="${esc(u?.position || '')}"></label>
       <label>권한<select name="role"><option value="user">직원</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>관리자</option></select></label></div>
     <label>회사 이메일 (@cafefrihet.com)<input name="email" type="email" value="${esc(u?.email || '')}"></label>
-    <label>법인카드 일지 구분 (비우면 직책이 '팀장'인 경우에만 팀장카드로 사용 · '사용안함'이면 부서팀장 일지에서 제외)<input name="team_card" list="tc-list" value="${esc(u?.team_card || '')}" placeholder="예: 총무카드"><datalist id="tc-list"><option value="총무카드"><option value="팀장카드"><option value="사용안함"></datalist></label>
+    <label>법인카드 일지 구분 (비우면 직책이 '팀장'인 경우에만 팀장카드로 사용 · '사용안함'이면 부서관리 일지에서 제외)<input name="team_card" list="tc-list" value="${esc(u?.team_card || '')}" placeholder="예: 총무카드"><datalist id="tc-list"><option value="총무카드"><option value="팀장카드"><option value="사용안함"></datalist></label>
     ${u ? `<h2 style="margin-top:6px">등록 차량</h2>${(u.vehicles || []).map((v) => `<div class="card veh-edit" data-vid="${v.id}" style="display:grid;gap:8px;padding:12px">
         <div class="grid3"><label>차량번호<input name="v_plate" value="${esc(v.plate)}"></label>
           <label>구분<select name="v_ownership">${Object.entries(OWN).map(([k, l]) => `<option value="${k}" ${v.ownership === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -1198,11 +1198,11 @@ async function granterAdmin() {
   const box = $('#granter-box'); if (!box) return;
   const [g, users] = await Promise.all([api('/api/admin/granter'), api('/api/users?all=1')]);
   const L = g.last;
-  const BOOK = { auto: '자동 (팀장카드 대상자면 팀장일지)', drive: '차량운행일지', team: '부서팀장 법인카드 일지', off: '연동 안 함' };
+  const BOOK = { auto: '자동 (팀장카드 대상자면 부서관리 일지)', drive: '차량운행일지', team: '부서관리 법인카드 일지', off: '연동 안 함' };
   box.innerHTML = `<h2>그랜터 법인카드 연동 ${g.enabled ? '<span class="badge ok">API 키 등록됨</span>' : '<span class="badge off">API 키 미등록</span>'}</h2>
     <p class="note">10분마다 그랜터 카드 사용내역을 자동으로 불러옵니다. 금액·일자·가맹점은 그랜터 기준이며, 취소·제외 처리된 건은 자동으로 빠집니다. 직원은 사용 목적·상세내용·영수증만 입력합니다.
-      직원 연결 순서: 아래에서 지정한 직원 → 카드명 앞 담당자 이름(예: 노아_기업체크카드 → 노아) → 그랜터 사용직원·카드 소유자. 기록 위치 '자동'은 팀장카드 대상자면 부서팀장 일지, 아니면 차량운행일지입니다.
-      '일지 표시명'을 넣고 기록 위치를 부서팀장 법인카드 일지로 두면 그 카드는 팀장일지에 별도 항목으로 보입니다. ${g.enabled ? '' : '<b>API 키는 FND 환경변수 GRANTER_API_KEY 에 등록해야 동작합니다.</b>'}</p>
+      직원 연결 순서: 아래에서 지정한 직원 → 카드명 앞 담당자 이름(예: 노아_기업체크카드 → 노아) → 그랜터 사용직원·카드 소유자. 기록 위치 '자동'은 팀장카드 대상자면 부서관리 일지, 아니면 차량운행일지입니다.
+      '일지 표시명'을 넣고 기록 위치를 부서관리 법인카드 일지로 두면 그 카드는 부서관리 일지에 별도 항목으로 보입니다. ${g.enabled ? '' : '<b>API 키는 FND 환경변수 GRANTER_API_KEY 에 등록해야 동작합니다.</b>'}</p>
     <div class="row"><label class="inline">연동 시작일 <input type="date" name="g_from" value="${esc(g.from)}" style="width:auto"></label><button class="btn sm" id="g-from">시작일 저장</button>
       <button class="btn primary" id="g-sync" ${g.enabled ? '' : 'disabled'}>지금 동기화</button></div>
     <div class="note">최근 동기화: ${L ? `${esc(new Date(L.at).toLocaleString('ko-KR'))} · ${L.ok ? `조회 ${L.fetched}건 · 신규 ${L.inserted} · 수기입력 흡수 ${L.merged} · 변경 ${L.updated} · 삭제 ${L.removed} · 직원 미연결 ${L.skipped_unmapped}건` : '실패: ' + esc(L.error)}` : '없음'}</div>
@@ -1210,7 +1210,7 @@ async function granterAdmin() {
     <div class="table-wrap"><table><thead><tr><th>그랜터 카드</th><th>카드번호</th><th>연결 직원</th><th>기록 위치</th><th>일지 표시명 (별도 항목)</th><th class="n">적재</th><th class="n">목적 미선택</th><th></th></tr></thead><tbody>
     ${g.cards.filter((c) => state.showOffCards || c.book !== 'off').map((c) => `<tr data-card="${esc(c.card_id)}"><td class="wrap">${esc(c.name)}</td><td>${esc(c.number || '')}</td>
       <td><select name="uid"><option value="">자동${c.auto_user ? ': ' + esc(c.auto_user) : ' (매칭 없음)'}</option>${users.filter((u) => u.active || u.id === c.user_id).map((u) => `<option value="${u.id}" ${u.id === c.user_id ? 'selected' : ''}>${esc(u.name)}${u.nickname ? ' (' + esc(u.nickname) + ')' : ''}</option>`).join('')}</select></td>
-      <td><select name="book">${Object.entries(BOOK).map(([k, v]) => `<option value="${k}" ${k === c.book ? 'selected' : ''}>${k === 'auto' && c.auto_book ? '자동: ' + (c.auto_book === 'team' ? '부서팀장 일지' : '차량운행일지') : v}</option>`).join('')}</select></td>
+      <td><select name="book">${Object.entries(BOOK).map(([k, v]) => `<option value="${k}" ${k === c.book ? 'selected' : ''}>${k === 'auto' && c.auto_book ? '자동: ' + (c.auto_book === 'team' ? '부서관리 일지' : '차량운행일지') : v}</option>`).join('')}</select></td>
       <td><input name="label" value="${esc(c.label || '')}" placeholder="예: 삼성카드 전용"></td>
       <td class="n">${c.n}</td><td class="n">${c.n_unset}</td><td><button class="btn sm" data-csave>저장</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">아직 불러온 카드가 없습니다. 동기화 후 표시됩니다.</td></tr>'}</tbody></table></div>`;
   $('#g-off').onclick = () => { state.showOffCards = !state.showOffCards; granterAdmin(); };
