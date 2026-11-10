@@ -1102,7 +1102,7 @@ function userForm(u, models, done = pageStaff) {
       <label>직책<input name="position" value="${esc(u?.position || '')}"></label>
       <label>권한<select name="role"><option value="user">직원</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>관리자</option></select></label></div>
     <label>회사 이메일 (@cafefrihet.com)<input name="email" type="email" value="${esc(u?.email || '')}"></label>
-    <label>법인카드 일지 구분 (비우면 직책이 '팀장'인 경우에만 팀장카드로 사용)<input name="team_card" list="tc-list" value="${esc(u?.team_card || '')}" placeholder="예: 총무카드"><datalist id="tc-list"><option value="총무카드"><option value="팀장카드"></datalist></label>
+    <label>법인카드 일지 구분 (비우면 직책이 '팀장'인 경우에만 팀장카드로 사용 · '사용안함'이면 부서팀장 일지에서 제외)<input name="team_card" list="tc-list" value="${esc(u?.team_card || '')}" placeholder="예: 총무카드"><datalist id="tc-list"><option value="총무카드"><option value="팀장카드"><option value="사용안함"></datalist></label>
     ${u ? `<h2 style="margin-top:6px">등록 차량</h2>${(u.vehicles || []).map((v) => `<div class="card veh-edit" data-vid="${v.id}" style="display:grid;gap:8px;padding:12px">
         <div class="grid3"><label>차량번호<input name="v_plate" value="${esc(v.plate)}"></label>
           <label>구분<select name="v_ownership">${Object.entries(OWN).map(([k, l]) => `<option value="${k}" ${v.ownership === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>

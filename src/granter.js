@@ -78,7 +78,7 @@ function normalize(t) {
   };
 }
 
-const isHolder = (u) => !!u && (!!u.team_card || /팀장/.test(u.position || ''));
+const isHolder = (u) => !!u && u.team_card !== '사용안함' && (!!u.team_card || /팀장/.test(u.position || ''));
 
 async function sync({ reason = 'auto' } = {}) {
   if (!enabled()) return { ok: false, error: 'GRANTER_API_KEY 미설정' };

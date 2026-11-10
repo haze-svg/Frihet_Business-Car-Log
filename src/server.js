@@ -85,7 +85,9 @@ const auth = wrap(async (req, res, next) => {
 const admin = (req, res, next) => (req.user.role === 'admin' ? next() : next(bad('관리자 권한이 필요합니다', 403)));
 const isAdmin = (req) => req.user.role === 'admin';
 // 법인카드 일지 사용자: 직책에 '팀장' 포함 또는 카드 구분(team_card) 지정 (관리자라도 지정 없으면 제외)
-const isHolder = (u) => !!u && (!!u.team_card || /팀장/.test(u.position || ''));
+// team_card='사용안함' 이면 직책이 팀장이어도 부서팀장 일지 대상에서 제외 (예: 운행일지 카드와 같은 카드를 쓰는 팀장)
+const NO_TEAM = '사용안함';
+const isHolder = (u) => !!u && u.team_card !== NO_TEAM && (!!u.team_card || /팀장/.test(u.position || ''));
 const cardLabel = (u) => u.team_card || '팀장카드';
 // 장부: drive(운행일지) / team(부서팀장 법인카드) — team은 팀장·관리자만, 법인카드만
 async function resolveBook(req, book, userId) {
@@ -592,7 +594,7 @@ app.delete('/api/expenses/:id', auth, wrap(async (req, res) => {
 
 // ---------- 법인카드 사용 관리 (관리자) ----------
 app.get('/api/leads', auth, wrap(async (req, res) => {
-  const r = await q(`SELECT id,name,nickname,department,position,active,team_card FROM users WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') ${isAdmin(req) ? '' : 'AND id=$1'} ORDER BY department NULLS LAST, name`, isAdmin(req) ? [] : [req.user.id]);
+  const r = await q(`SELECT id,name,nickname,department,position,active,team_card FROM users WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') AND COALESCE(team_card,'')<>'사용안함' ${isAdmin(req) ? '' : 'AND id=$1'} ORDER BY department NULLS LAST, name`, isAdmin(req) ? [] : [req.user.id]);
   // 별도 항목으로 지정한 그랜터 카드 (예: 삼성카드 전용)
   const c = await q(`SELECT g.card_id, g.label, u.id,u.name,u.nickname,u.department,u.position,u.active,u.team_card FROM granter_cards g JOIN users u ON u.id=g.user_id
     WHERE g.book='team' AND g.label IS NOT NULL AND g.label<>'' ${isAdmin(req) ? '' : 'AND u.id=$1'} ORDER BY u.name, g.label`, isAdmin(req) ? [] : [req.user.id]);
@@ -727,7 +729,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
 app.get('/api/team-summary', auth, wrap(async (req, res) => {
   const { from, to } = period(req);
   const holders = (await q(`SELECT id,name,nickname,department,position,active,team_card FROM users
-    WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') ORDER BY department NULLS LAST, name`)).rows
+    WHERE (team_card IS NOT NULL AND team_card<>'' OR position LIKE '%팀장%') AND COALESCE(team_card,'')<>'사용안함' ORDER BY department NULLS LAST, name`)).rows
     .filter((u) => isAdmin(req) || u.id === req.user.id);
   const ids = holders.map((u) => u.id);
   if (!ids.length) return res.json({ from, to, users: [], categories: [], monthly: [] });
@@ -764,7 +766,7 @@ app.get('/api/records', auth, wrap(async (req, res) => {
   if (!isAdmin(req) && kind !== 'maintenance') ids = [req.user.id];
   if (ids && ids.length) add('x.user_id = ANY(?)', ids);
   if (req.query.scope === 'summary') W.push("COALESCE(u.position,'') NOT LIKE '%대표%'");
-  if (req.query.holders === '1') W.push("((u.team_card IS NOT NULL AND u.team_card<>'') OR u.position LIKE '%팀장%')");
+  if (req.query.holders === '1') W.push("((u.team_card IS NOT NULL AND u.team_card<>'') OR u.position LIKE '%팀장%') AND COALESCE(u.team_card,'')<>'사용안함'");
   const where = W.length ? ' AND ' + W.join(' AND ') : '';
   let rows, ownerType = null;
   if (kind === 'trips') {
