@@ -723,10 +723,11 @@ async function pageTeamCard() {
     <div class="page-head"><h1>${userLabel(u)} 법인카드 일지 <span class="badge corp">${esc(u.card_label)}</span></h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
     <div class="kpis"><div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
       <div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
-      <div class="kpi pick" ${dd(u.name + ' 영수증 있는 사용', { kind: 'expenses', book: 'team', user_ids: u.id, has_photo: 1 })}><div class="l">영수증 사진</div><div class="v">${nPh}장</div></div>
       <div class="kpi"><div class="l">항목별</div><div class="note">${Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => ddLink(`${esc(k)} ${won(v)}`, u.name + ' · ' + k, { kind: 'expenses', book: 'team', user_ids: u.id, category: k })).join(' · ') || '-'}</div></div></div>
     ${state.granter ? (rows.some((r) => r.category === UNSET) ? `<div class="warn" style="margin-bottom:10px">사용 목적을 선택하지 않은 사용 ${rows.filter((r) => r.category === UNSET).length}건이 있습니다. 각 건 옆에서 선택 후 저장하세요.</div>` : '') : '<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-team">+ 법인카드 사용 등록 (여러 건)</button></div>'}
-    ${rows.some((r) => r.source === 'granter') ? `<div class="g-grid wide">${rows.filter((r) => r.source === 'granter').map((r) => gRowHtml(r, TEAM_CATS)).join('')}</div>` : ''}
+    ${rows.some((r) => r.source === 'granter') ? `<div class="g-grid wide">${Object.keys(days).sort().reverse().filter((d) => days[d].some((r) => r.source === 'granter')).map((d) => { const G = days[d].filter((r) => r.source === 'granter');
+      return `<div class="g-day"><b>${d}</b><span>${G.length}건 · 합계 <b>${won(G.reduce((a, r) => a + r.amount, 0))}원</b></span></div>${G.map((r) => gRowHtml(r, TEAM_CATS)).join('')}`; }).join('')}
+      <div class="g-day total"><b>기간 합계</b><span>${rows.length}건 · <b>${won(total)}원</b></span></div></div>` : ''}
     ${Object.keys(days).sort().reverse().filter((d) => days[d].some((r) => r.source !== 'granter')).map((d) => { const M = days[d].filter((r) => r.source !== 'granter'); return `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
       <span class="note">합계 <b>${won(M.reduce((a, r) => a + r.amount, 0))}원</b> · ${M.length}건</span></div>${M.map(expItemHtml).join('')}</div>`; }).join('')}
     ${rows.length ? '' : '<div class="card empty">기간 내 사용 내역 없음</div>'}
