@@ -15,13 +15,13 @@ const UNSET = '미선택';
 function gRowHtml(r, cats, withSave = true) {
   const cur = r.category === UNSET ? '' : r.category;
   const std = cats.includes(cur);
-  return `<div class="g-row" data-gid="${r.id}"><div class="g-head"><span class="badge corp">법인카드</span><b class="g-merch">${esc(r.merchant || '-')}</b>
-      <span class="note">${String(r.expense_date).slice(0, 10)} ${esc(r.pay_time || '')}</span><b class="g-amt">${won(r.amount)}원</b></div>
-    <div class="g-in"><select name="gcat"><option value="">사용 목적 선택</option>${cats.map((x) => `<option ${x === (std ? cur : (cur ? '기타' : '')) ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
-      <input name="getc" class="${!std && cur ? '' : 'hidden'}" placeholder="기타 사용 목적 직접 입력" value="${!std && cur && cur !== '기타' ? esc(cur) : ''}">
-      <input name="gdet" placeholder="상세 내용 (선택)" value="${esc(r.purpose || '')}">
-      ${withSave ? '<button class="btn sm primary" data-gsave>저장</button>' : ''}</div>
-    <div class="g-ph">${(r.photos || []).length ? thumbs(r.photos) : ''}<label class="note">영수증 사진<input type="file" name="gphotos" accept="image/*,application/pdf" multiple></label></div></div>`;
+  const unset = !cur;
+  return `<div class="g-row${unset ? ' unset' : ''}" data-gid="${r.id}">
+    <div class="g-head"><b class="g-merch" title="${esc(r.merchant || '')}">${esc(r.merchant || '-')}</b><b class="g-amt">${won(r.amount)}원</b></div>
+    <div class="g-when">${String(r.expense_date).slice(5, 10).replace('-', '/')} ${esc(r.pay_time || '')}${(r.photos || []).length ? ` · <a href="/api/photos/${r.photos[0].id}" target="_blank">영수증 ${r.photos.length}</a>` : ''}</div>
+    <select name="gcat"><option value="">사용 목적 선택</option>${cats.map((x) => `<option ${x === (std ? cur : (cur ? '기타' : '')) ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
+    <input name="getc" class="${!std && cur ? '' : 'hidden'}" placeholder="기타 사용 목적 직접 입력" value="${!std && cur && cur !== '기타' ? esc(cur) : ''}">
+    <div class="g-det"><input name="gdet" placeholder="상세 내용 (선택)" value="${esc(r.purpose || '')}">${withSave ? '<button class="btn sm primary" data-gsave>저장</button>' : ''}</div></div>`;
 }
 function gVal(el) {
   const sel = $('[name=gcat]', el).value, etc = $('[name=getc]', el).value.trim();
@@ -35,7 +35,6 @@ function bindGRows(root, after) {
       const v = gVal(el);
       if ($('[name=gcat]', el).value === '기타' && !$('[name=getc]', el).value.trim()) return toast('기타 사용 목적을 직접 입력하세요', true);
       const fd = new FormData(); fd.append('category', v.category); fd.append('purpose', v.purpose);
-      for (const f of $('[name=gphotos]', el).files) fd.append('photos', await shrink(f));
       b.disabled = true;
       try { await api(`/api/expenses/${el.dataset.gid}/classify`, { method: 'PUT', body: fd }); toast('저장되었습니다'); after && after(); } catch (e) { fail(e); b.disabled = false; }
     };
@@ -360,7 +359,7 @@ async function pageTrips() {
         ${Object.keys(days).sort().reverse().map((d) => { const D = days[d]; const sc = D.corporate.reduce((a, r) => a + r.amount, 0), sp = D.personal.reduce((a, r) => a + r.amount, 0);
           return `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
             <span class="note">법인 <b style="color:var(--corp)">${won(sc)}</b> · 개인 <b style="color:var(--pers)">${won(sp)}</b> · 합계 <b>${won(sc + sp)}원</b></span></div>
-            <div class="grid2"><div><div class="col-title corp">법인카드</div>${D.corporate.map(item).join('') || '<div class="note">-</div>'}</div>
+            <div class="grid2"><div><div class="col-title corp">법인카드</div><div class="g-grid">${D.corporate.filter((r) => r.source === 'granter').map((r) => gRowHtml(r, EXP_CATS)).join('')}</div>${D.corporate.filter((r) => r.source !== 'granter').map(item).join('') || (D.corporate.length ? '' : '<div class="note">-</div>')}</div>
             <div><div class="col-title pers">개인카드</div>${D.personal.map(item).join('') || '<div class="note">-</div>'}</div></div></div>`; }).join('') || '<div class="empty card">기간 내 카드 사용 내역 없음</div>'}
         ${bundles.length ? `<h2 style="margin-top:18px">엑셀 이관 영수증 (월별 일괄 · 건별 구분 불가)</h2>${bundles.map((r) => `<div class="card day-block"><div class="row" style="justify-content:space-between"><b>${esc(r.purpose)}</b><span class="note">${esc(r.memo || '')}</span></div><div class="thumbs big">${thumbs(r.photos).replace('<div class="thumbs">', '').replace(/<\/div>$/, '')}</div></div>`).join('')}` : ''}`;
       $('#add-day2').onclick = () => dayForm(u, myVehicles);
@@ -555,7 +554,7 @@ async function dayForm(u, vehicles) {
     <h3 class="sec">카드 사용 내역</h3>
     <div class="grid2 cards2">
       <div class="card-col corp"><div class="col-title corp">법인카드${state.granter ? ' <span class="note">(그랜터 카드내역 자동 불러오기)</span>' : ''}</div>
-        ${state.granter ? '<div id="g-rows"><div class="note">불러오는 중…</div></div>' : '<div class="exp-rows" data-card="corporate"></div><button class="btn sm" data-addexp="corporate">+ 법인카드 사용 추가</button>'}</div>
+        ${state.granter ? '<div id="g-rows" class="g-grid"><div class="note">불러오는 중…</div></div>' : '<div class="exp-rows" data-card="corporate"></div><button class="btn sm" data-addexp="corporate">+ 법인카드 사용 추가</button>'}</div>
       <div class="card-col pers"><div class="col-title pers">개인카드</div><div class="exp-rows" data-card="personal"></div><button class="btn sm" data-addexp="personal">+ 개인카드 사용 추가</button></div>
     </div>
     <h3 class="sec">당일 합계</h3>
@@ -682,7 +681,7 @@ async function dayForm(u, vehicles) {
     const fd = new FormData();
     fd.append('payload', JSON.stringify({ user_id: u.id, date: f('date').value, vehicle_id: f('vehicle_id').value || null,
       fuel_price_won: f('price').value, efficiency_km_l: f('eff').value, legs, expenses, classify }));
-    for (const el of gEls) for (const file of $('[name=gphotos]', el).files) fd.append('photo_g' + el.dataset.gid, await shrink(file));
+
     btn.disabled = true; btn.textContent = '저장 중…';
     try {
       for (const el of $$('.exp-row', c)) for (const file of $('[name=photos]', el).files) fd.append('photo_' + el.dataset.key, await shrink(file));
@@ -727,8 +726,10 @@ async function pageTeamCard() {
       <div class="kpi pick" ${dd(u.name + ' 영수증 있는 사용', { kind: 'expenses', book: 'team', user_ids: u.id, has_photo: 1 })}><div class="l">영수증 사진</div><div class="v">${nPh}장</div></div>
       <div class="kpi"><div class="l">항목별</div><div class="note">${Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => ddLink(`${esc(k)} ${won(v)}`, u.name + ' · ' + k, { kind: 'expenses', book: 'team', user_ids: u.id, category: k })).join(' · ') || '-'}</div></div></div>
     ${state.granter ? (rows.some((r) => r.category === UNSET) ? `<div class="warn" style="margin-bottom:10px">사용 목적을 선택하지 않은 사용 ${rows.filter((r) => r.category === UNSET).length}건이 있습니다. 각 건 옆에서 선택 후 저장하세요.</div>` : '') : '<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-team">+ 법인카드 사용 등록 (여러 건)</button></div>'}
-    ${Object.keys(days).sort().reverse().map((d) => `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
-      <span class="note">합계 <b>${won(days[d].reduce((a, r) => a + r.amount, 0))}원</b> · ${days[d].length}건</span></div>${days[d].map(expItemHtml).join('')}</div>`).join('') || '<div class="card empty">기간 내 사용 내역 없음</div>'}
+    ${rows.some((r) => r.source === 'granter') ? `<div class="g-grid wide">${rows.filter((r) => r.source === 'granter').map((r) => gRowHtml(r, TEAM_CATS)).join('')}</div>` : ''}
+    ${Object.keys(days).sort().reverse().filter((d) => days[d].some((r) => r.source !== 'granter')).map((d) => { const M = days[d].filter((r) => r.source !== 'granter'); return `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
+      <span class="note">합계 <b>${won(M.reduce((a, r) => a + r.amount, 0))}원</b> · ${M.length}건</span></div>${M.map(expItemHtml).join('')}</div>`; }).join('')}
+    ${rows.length ? '' : '<div class="card empty">기간 내 사용 내역 없음</div>'}
     ${bundles.length ? `<h2 style="margin-top:18px">이관 영수증 (월별 일괄 · 건별 연결 안 된 사진)</h2>${bundles.map((r) => `<div class="card day-block"><div class="row" style="justify-content:space-between"><b>${esc(r.purpose)}</b><span class="note">${esc(r.memo || '')}</span></div>${thumbs(r.photos)}</div>`).join('')}` : ''}`;
   $('#back')?.addEventListener('click', () => go('teamcard'));
   $('#add-team')?.addEventListener('click', () => teamForm(u));
