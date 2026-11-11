@@ -706,7 +706,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
       COALESCE(e.fueling,0)::int fueling_won, COALESCE(e.cnt,0)::int expense_count,
       COALESCE(m.amt,0)::int maintenance_won, COALESCE(m.cnt,0)::int maintenance_count
     FROM users u LEFT JOIN t ON t.user_id=u.id LEFT JOIN e ON e.user_id=u.id LEFT JOIN m ON m.user_id=u.id
-    WHERE (u.active OR t.cnt IS NOT NULL OR e.cnt IS NOT NULL) AND COALESCE(u.position,'') NOT LIKE '%대표%' ${userFilter}
+    WHERE (u.active OR t.cnt IS NOT NULL OR e.cnt IS NOT NULL) AND COALESCE(u.position,'') NOT LIKE '%대표%' AND COALESCE(u.position,'')<>'부서카드' ${userFilter}
     ORDER BY u.department NULLS LAST, u.name`, params);
 
   const monthly = await q(`
@@ -723,7 +723,7 @@ app.get('/api/summary', auth, wrap(async (req, res) => {
       (sum(fuel)+sum(toll)+sum(parking))::int operating_cost_won,
       COALESCE(sum(corp),0)::int corporate_card_won, COALESCE(sum(personal),0)::int personal_card_won,
       COALESCE(sum(fueling),0)::int fueling_won
-    FROM months JOIN users u ON u.id=months.user_id WHERE COALESCE(u.position,'') NOT LIKE '%대표%' ${userFilter}
+    FROM months JOIN users u ON u.id=months.user_id WHERE COALESCE(u.position,'') NOT LIKE '%대표%' AND COALESCE(u.position,'')<>'부서카드' ${userFilter}
     GROUP BY ym ORDER BY ym`, params);
 
   res.json({ from, to, users: perUser.rows, monthly: monthly.rows });
@@ -756,6 +756,25 @@ app.get('/api/team-summary', auth, wrap(async (req, res) => {
 // ---------- 대시보드 숫자 상세 (드릴다운) ----------
 // kind=trips|expenses|maintenance, 공통: from,to,user_ids,ym(YYYY-MM)
 // expenses: book=drive|team|all, card_type, category(쉼표), has_photo=1 / maintenance: vehicle_id / scope=summary(대표 제외), holders=1(법인카드 일지 사용자)
+// 사용 목적별 × 월별 카드 사용 합계 (통합 합계관리·부서관리 합계관리)
+app.get('/api/purpose-summary', auth, wrap(async (req, res) => {
+  const { from, to } = period(req);
+  const P = [from, to]; const W = [];
+  const add = (sql, v) => { P.push(v); W.push(sql.replace('?', '$' + P.length)); };
+  const book = req.query.book === 'team' ? 'team' : 'drive';
+  add('x.book = ?', book);
+  let ids = req.query.user_ids ? String(req.query.user_ids).split(',').map(int).filter(Boolean) : null;
+  if (!isAdmin(req)) ids = book === 'team' ? myIds(req) : [req.user.id];
+  if (ids && ids.length) add('x.user_id = ANY(?)', ids);
+  if (req.query.scope === 'summary') W.push("COALESCE(u.position,'') NOT LIKE '%대표%'");
+  if (req.query.holders === '1') W.push("((u.team_card IS NOT NULL AND u.team_card<>'') OR u.position LIKE '%팀장%') AND COALESCE(u.team_card,'')<>'사용안함'");
+  const r = await q(`SELECT to_char(x.expense_date,'YYYY-MM') ym, x.category, x.card_type, count(*)::int cnt, sum(x.amount)::bigint amount
+    FROM expenses x JOIN users u ON u.id=x.user_id
+    WHERE x.expense_date BETWEEN $1 AND $2 AND x.card_type<>'receipt' AND ${W.join(' AND ')}
+    GROUP BY 1,2,3 ORDER BY 1`, P);
+  res.json(r.rows.map((x) => ({ ...x, amount: Number(x.amount) })));
+}));
+
 app.get('/api/records', auth, wrap(async (req, res) => {
   let { from, to } = period(req);
   if (/^\d{4}-\d{2}$/.test(String(req.query.ym || ''))) {

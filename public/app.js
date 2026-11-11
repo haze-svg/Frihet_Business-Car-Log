@@ -23,6 +23,32 @@ function gRowHtml(r, cats, withSave = true) {
     <input name="getc" class="${!std && cur ? '' : 'hidden'}" placeholder="기타 사용 목적 직접 입력" value="${!std && cur && cur !== '기타' ? esc(cur) : ''}">
     <div class="g-det"><input name="gdet" placeholder="상세 내용 (선택)" value="${esc(r.purpose || '')}">${withSave ? '<button class="btn sm primary" data-gsave>저장</button>' : ''}</div></div>`;
 }
+// ---- 사용 목적별 합계표: 행=사용 목적, 열=월별 + 법인/개인/합계, 마지막 행=합계 ----
+// items: [{ym, category, card_type, cnt, amount}] (행 단위 내역은 aggToItems 로 변환)
+function aggToItems(rows) {
+  const m = {};
+  rows.filter((r) => r.card_type !== 'receipt').forEach((r) => {
+    const k = [String(r.expense_date).slice(0, 7), r.category, r.card_type].join('|');
+    (m[k] ||= { ym: String(r.expense_date).slice(0, 7), category: r.category, card_type: r.card_type, cnt: 0, amount: 0 });
+    m[k].cnt++; m[k].amount += Number(r.amount) || 0;
+  });
+  return Object.values(m);
+}
+function purposeTable(items, { cats = EXP_CATS, title = '사용 목적별 합계', split = true, ddq = null } = {}) {
+  if (!items.length) return '';
+  const months = [...new Set(items.map((x) => x.ym))].sort();
+  const used = [...new Set(items.map((x) => x.category))];
+  const order = [...cats.filter((c) => used.includes(c)), ...used.filter((c) => !cats.includes(c) && c !== UNSET).sort(), ...(used.includes(UNSET) ? [UNSET] : [])];
+  const S = (f) => items.filter(f).reduce((a, x) => a + x.amount, 0), N = (f) => items.filter(f).reduce((a, x) => a + x.cnt, 0);
+  const link = (v, label, extra) => ddq ? ddLink(v, label, { ...ddq, ...extra }) : v;
+  const cell = (cat, ym, ct) => { const f = (x) => (!cat || x.category === cat) && (!ym || x.ym === ym) && (!ct || x.card_type === ct); const v = S(f);
+    return v ? link(won(v), `${cat || '전체'}${ym ? ' · ' + ym : ''}${ct ? (ct === 'corporate' ? ' · 법인카드' : ' · 개인카드') : ''}`, { ...(cat ? { category: cat } : {}), ...(ym ? { ym } : {}), ...(ct ? { card_type: ct } : {}) }) : '-'; };
+  const showMonths = months.length > 1;
+  const head = `<th>사용 목적</th>${showMonths ? months.map((m) => `<th class="n">${m.slice(2).replace('-', '.')}</th>`).join('') : ''}${split ? '<th class="n">법인카드</th><th class="n">개인카드</th>' : ''}<th class="n">건수</th><th class="n">합계</th>`;
+  const row = (cat) => `<tr${cat === UNSET ? ' class="unset-row"' : ''}><td>${esc(cat || '합계')}</td>${showMonths ? months.map((m) => `<td class="n">${cell(cat, m)}</td>`).join('') : ''}${split ? `<td class="n">${cell(cat, null, 'corporate')}</td><td class="n">${cell(cat, null, 'personal')}</td>` : ''}<td class="n">${N((x) => !cat || x.category === cat)}</td><td class="n"><b>${cell(cat)}</b></td></tr>`;
+  return `<div class="card" style="margin:10px 0"><h2>${title}</h2><div class="table-wrap"><table class="ptable"><thead><tr>${head}</tr></thead>
+    <tbody>${order.map(row).join('')}</tbody><tfoot>${row(null)}</tfoot></table></div></div>`;
+}
 function gVal(el) {
   const sel = $('[name=gcat]', el).value, etc = $('[name=getc]', el).value.trim();
   return { category: !sel ? UNSET : sel === '기타' ? (etc || '기타') : sel, purpose: $('[name=gdet]', el).value };
@@ -356,6 +382,7 @@ async function pageTrips() {
           <div class="kpi pick" ${dd(u.name + ' 개인카드', { kind: 'expenses', user_ids: u.id, card_type: 'personal' })}><div class="l">개인카드 합계</div><div class="v" style="color:var(--pers)">${won(e.personal)}원</div><div class="note">${real.filter((r) => r.card_type === 'personal').length}건</div></div>
           <div class="kpi pick" ${dd(u.name + ' 카드 사용 전체', { kind: 'expenses', user_ids: u.id })}><div class="l">총 합계</div><div class="v">${won(e.corporate + e.personal)}원</div></div>
           <div class="kpi pick" ${dd(u.name + ' 영수증 있는 카드 사용', { kind: 'expenses', user_ids: u.id, has_photo: 1 })}><div class="l">영수증 사진</div><div class="v">${nPhotos}장</div></div></div>
+        ${purposeTable(aggToItems(exps), { ddq: { kind: 'expenses', user_ids: u.id } })}
         ${Object.keys(days).sort().reverse().map((d) => { const D = days[d]; const sc = D.corporate.reduce((a, r) => a + r.amount, 0), sp = D.personal.reduce((a, r) => a + r.amount, 0);
           return `<div class="card day-block"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${d}</b>
             <span class="note">법인 <b style="color:var(--corp)">${won(sc)}</b> · 개인 <b style="color:var(--pers)">${won(sp)}</b> · 합계 <b>${won(sc + sp)}원</b></span></div>
@@ -723,7 +750,8 @@ async function pageTeamCard() {
     <div class="page-head"><h1>${userLabel(u)} 법인카드 일지 <span class="badge corp">${esc(u.card_label)}</span></h1><div class="grow"></div>${rangeControls(pageTeamCard)}</div>
     <div class="kpis"><div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">법인카드 사용 합계</div><div class="v" style="color:var(--corp)">${won(total)}원</div></div>
       <div class="kpi pick" ${dd(u.name + ' 법인카드 사용', { kind: 'expenses', book: 'team', user_ids: u.id })}><div class="l">사용 건수</div><div class="v">${rows.length}건</div></div>
-      <div class="kpi"><div class="l">항목별</div><div class="note">${Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, v]) => ddLink(`${esc(k)} ${won(v)}`, u.name + ' · ' + k, { kind: 'expenses', book: 'team', user_ids: u.id, category: k })).join(' · ') || '-'}</div></div></div>
+      </div>
+    ${purposeTable(aggToItems(rows), { cats: TEAM_CATS, split: false, ddq: { kind: 'expenses', book: 'team', user_ids: u.id } })}
     ${state.granter ? (rows.some((r) => r.category === UNSET) ? `<div class="warn" style="margin-bottom:10px">사용 목적을 선택하지 않은 사용 ${rows.filter((r) => r.category === UNSET).length}건이 있습니다. 각 건 옆에서 선택 후 저장하세요.</div>` : '') : '<div class="row" style="margin-bottom:10px"><button class="btn primary" id="add-team">+ 법인카드 사용 등록 (여러 건)</button></div>'}
     ${rows.some((r) => r.source === 'granter') ? `<div class="g-grid wide">${Object.keys(days).sort().reverse().filter((d) => days[d].some((r) => r.source === 'granter')).map((d) => { const G = days[d].filter((r) => r.source === 'granter');
       return `<div class="g-day"><b>${d}</b><span>${G.length}건 · 합계 <b>${won(G.reduce((a, r) => a + r.amount, 0))}원</b></span></div>${G.map((r) => gRowHtml(r, TEAM_CATS)).join('')}`; }).join('')}
@@ -979,8 +1007,10 @@ async function pageTeamSummary() {
       <tfoot><tr><td colspan="3">합계</td><td class="n">${ddLink(cnt, '부서관리 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td>${cats.map((c) => `<td class="n">${ddLink(won(d.users.reduce((a, u) => a + (u.by[c] || 0), 0)), '부서관리 법인카드 · ' + c, { kind: 'expenses', book: 'team', holders: 1, category: c })}</td>`).join('')}<td class="n">${ddLink(won(tot), '부서관리 법인카드 전체', { kind: 'expenses', book: 'team', holders: 1 })}</td><td></td></tr></tfoot></table></div>
     <p class="note">숫자를 누르면 해당 내역이 열리고, 이름을 누르면 해당 사용자의 법인카드 일지로 이동합니다.</p>
     <h2 style="margin-top:20px">월별 추이</h2>
-    <div class="card"><div class="bars">${d.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 부서관리 법인카드', { kind: 'expenses', book: 'team', holders: 1, ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원 · ${m.cnt}건</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>`;
+    <div class="card"><div class="bars">${d.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 부서관리 법인카드', { kind: 'expenses', book: 'team', holders: 1, ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${(m.amount / maxM) * 100}%"></div><span class="n">${won(m.amount)}원 · ${m.cnt}건</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>
+    <div id="purpose-sum"></div>`;
   bindSummaryTabs(main);
+  api(`/api/purpose-summary?book=team&holders=1&${rq()}`).then((it) => { const el = $('#purpose-sum', main); if (el) el.innerHTML = purposeTable(it, { cats: TEAM_CATS, split: false, title: '사용 목적별 합계 (월별)', ddq: { kind: 'expenses', book: 'team', holders: 1 } }); }).catch(() => {});
   $$('tr[data-uid]', main).forEach((tr) => (tr.onclick = () => go('teamcard/u/' + tr.dataset.uid)));
 }
 async function pageSummary() {
@@ -988,7 +1018,7 @@ async function pageSummary() {
   const main = $('#main');
   const ids = state.sumUsers.join(',');
   const [data, users0] = await Promise.all([api(`/api/summary?${rq()}${ids ? '&user_ids=' + ids : ''}`), isAdmin() ? api('/api/users?all=1') : Promise.resolve([])]);
-  const users = users0.filter((u) => !/대표/.test(u.position || ''));
+  const users = users0.filter((u) => !/대표/.test(u.position || '') && u.position !== '부서카드');
   const U = data.users;
   const sum = (k) => U.reduce((a, r) => a + Number(r[k] || 0), 0);
   const cols = [
@@ -1024,12 +1054,14 @@ async function pageSummary() {
     <div class="grid2"><div class="card"><div class="note" style="margin-bottom:8px">운행비 합계</div><div class="bars">${data.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 운행 기록', { ...sq, kind: 'trips', ym: m.ym })}><span>${m.ym}</span><div class="bar" style="width:${(m.operating_cost_won / maxOp) * 100}%"></div><span class="n">${won(m.operating_cost_won)}원</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div>
       <div class="card"><div class="note" style="margin-bottom:8px">카드 사용 (법인+개인)</div><div class="bars">${data.monthly.map((m) => `<div class="bar-row pick" ${dd(m.ym + ' 카드 사용', { ...sq, kind: 'expenses', ym: m.ym })}><span>${m.ym}</span><div class="bar alt" style="width:${((m.corporate_card_won + m.personal_card_won) / maxCard) * 100}%"></div><span class="n">${won(m.corporate_card_won + m.personal_card_won)}원</span></div>`).join('') || '<div class="empty">데이터 없음</div>'}</div></div></div>
     <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>월</th><th class="n">운행km</th><th class="n">연료비</th><th class="n">통행료</th><th class="n">운행비</th><th class="n">월 주유비</th><th class="n">법인카드</th><th class="n">개인카드</th></tr></thead>
-      <tbody>${data.monthly.map((m) => `<tr><td>${m.ym}</td><td class="n">${cell('distance_km', '운행km', km(m.distance_km), { ym: m.ym }, m.ym)}</td><td class="n">${cell('fuel_cost_won', '연료비', won(m.fuel_cost_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('toll_won', '통행료', won(m.toll_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('operating_cost_won', '운행비', won(m.operating_cost_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('fueling_won', '월 주유비', won(m.fueling_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('corporate_card_won', '법인카드', won(m.corporate_card_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('personal_card_won', '개인카드', won(m.personal_card_won), { ym: m.ym }, m.ym)}</td></tr>`).join('')}</tbody></table></div>`;
+      <tbody>${data.monthly.map((m) => `<tr><td>${m.ym}</td><td class="n">${cell('distance_km', '운행km', km(m.distance_km), { ym: m.ym }, m.ym)}</td><td class="n">${cell('fuel_cost_won', '연료비', won(m.fuel_cost_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('toll_won', '통행료', won(m.toll_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('operating_cost_won', '운행비', won(m.operating_cost_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('fueling_won', '월 주유비', won(m.fueling_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('corporate_card_won', '법인카드', won(m.corporate_card_won), { ym: m.ym }, m.ym)}</td><td class="n">${cell('personal_card_won', '개인카드', won(m.personal_card_won), { ym: m.ym }, m.ym)}</td></tr>`).join('')}</tbody></table></div>
+    <div id="purpose-sum"></div>`;
   $$('[data-uid]', main).forEach((tr) => (tr.onclick = async () => {
     if (!isAdmin()) return go('trips');
     go('trips/u/' + tr.dataset.uid);
   }));
   bindSummaryTabs(main);
+  api(`/api/purpose-summary?book=drive&scope=summary&${rq()}${ids ? '&user_ids=' + ids : ''}`).then((it) => { const el = $('#purpose-sum', main); if (el) el.innerHTML = purposeTable(it, { title: '카드 사용 목적별 합계 (월별)', ddq: { kind: 'expenses', ...sq } }); }).catch(() => {});
   $('#sel-all')?.addEventListener('click', () => { state.sumUsers = []; pageSummary(); });
   $$('.card input[type=checkbox]', main).forEach((cb) => (cb.onchange = () => {
     state.sumUsers = $$('.card input[type=checkbox]:checked', main).map((x) => Number(x.value)); pageSummary();
