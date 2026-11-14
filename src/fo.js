@@ -206,24 +206,21 @@ async function importPackage(data, dryRun) {
 
 // ---------- 이미지 패키지 (version: 'fo_images') ----------
 // { version:'fo_images', images:[{board, sheet, row(1부터, 시트 행 번호), col(0부터), file:'img/..', mime, name}] } + img/*
-// 같은 패키지를 다시 올리면 이관 이미지(uploaded_by NULL)만 지우고 다시 넣음
+// 나눠 올려도 되고 다시 올려도 같은 이미지는 건너뜀
 async function importImages(data, dryRun) {
   const rep = { fo_images: true, dry_run: dryRun, images: 0, rows_created: 0, sheet_missing: [], file_missing: 0 };
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const sheets = new Map((await client.query('SELECT id, board, name FROM fo_sheets')).rows.map((s) => [`${s.board}|${s.name}`, s.id]));
-    const cleared = new Set();
     for (const im of data.images || []) {
       const sid = sheets.get(`${im.board}|${clean(im.sheet)}`);
       if (!sid) { if (!rep.sheet_missing.includes(im.sheet)) rep.sheet_missing.push(im.sheet); continue; }
-      if (!cleared.has(sid)) {
-        await client.query(`DELETE FROM photos WHERE owner_type='fo_row' AND uploaded_by IS NULL AND owner_id IN (SELECT id FROM fo_rows WHERE sheet_id=$1)`, [sid]);
-        cleared.add(sid);
-      }
       const buf = data.readFile(im.file); if (!buf) { rep.file_missing++; continue; }
       let row = (await client.query('SELECT id FROM fo_rows WHERE sheet_id=$1 AND ord=$2 LIMIT 1', [sid, im.row])).rows[0];
       if (!row) { row = (await client.query("INSERT INTO fo_rows(sheet_id,ord,cells) VALUES($1,$2,'[]') RETURNING id", [sid, im.row])).rows[0]; rep.rows_created++; }
+      // 같은 칸·같은 파일(이름·크기)이 이미 있으면 건너뜀 → 나눠 올리거나 다시 올려도 중복 없음
+      if ((await client.query("SELECT 1 FROM photos WHERE owner_type='fo_row' AND owner_id=$1 AND col=$2 AND filename=$3 AND size=$4", [row.id, Number(im.col) || 0, im.name || 'image.jpg', buf.length])).rows.length) { rep.skipped = (rep.skipped || 0) + 1; continue; }
       await client.query('INSERT INTO photos(owner_type,owner_id,col,filename,mime,size,data) VALUES($1,$2,$3,$4,$5,$6,$7)',
         ['fo_row', row.id, Number(im.col) || 0, im.name || 'image.jpg', im.mime || 'image/jpeg', buf.length, buf]);
       rep.images++;
