@@ -225,7 +225,9 @@ async function pageFoBoard(board, sheetId) {
 async function renderSheet(board, sid, focusRow, mark) {
   const box = $('#fb-sheet'); if (!box) return;
   const s = await api('/api/fo/sheets/' + sid);
-  const ncol = Math.max(1, ...s.rows.map((r) => r.cells.length));
+  const ncol = Math.max(1, ...s.rows.map((r) => Math.max(r.cells.length, ...(r.images || []).map((i) => i.col + 1))));
+  const imgs = (r, i) => (r.images || []).filter((x) => x.col === i);
+  const thumbsOf = (L) => L.length ? `<div class="fb-imgs">${L.map((x) => `<img src="/api/photos/${x.id}" data-full="/api/photos/${x.id}" loading="lazy" alt="">`).join('')}</div>` : '';
   const colL = (i) => { let t = ''; i++; while (i > 0) { const m = (i - 1) % 26; t = String.fromCharCode(65 + m) + t; i = Math.floor((i - 1) / 26); } return t; };
   const isDateCell = (v) => /^\d{4}[-.]\s?\d{1,2}[-.]\s?\d{1,2}/.test(String(v || '').trim());
   box.innerHTML = `<div class="card fb-card"><div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px">
@@ -236,22 +238,35 @@ async function renderSheet(board, sid, focusRow, mark) {
     <div class="fb-grid-wrap"><table class="fb-grid"><thead><tr><th class="rn"></th>${Array.from({ length: ncol }, (_, i) => `<th>${colL(i)}</th>`).join('')}</tr></thead>
       <tbody>${s.rows.map((r, ri) => `<tr data-row="${r.id}"${r.id === focusRow ? ' class="focus"' : ''}><td class="rn" data-rmenu="${r.id}">${ri + 1}</td>${Array.from({ length: ncol }, (_, i) => {
     const v = r.cells[i] ?? '';
-    return `<td data-c="${i}"${isDateCell(v) && i <= 2 ? ' class="dcell"' : ''}>${mark ? hl(v, mark) : nl(v)}</td>`;
+    return `<td data-c="${i}"${isDateCell(v) && i <= 2 ? ' class="dcell"' : ''}>${mark ? hl(v, mark) : nl(v)}${thumbsOf(imgs(r, i))}</td>`;
   }).join('')}</tr>`).join('')}</tbody></table></div></div>`;
   const reload = (fr) => renderSheet(board, sid, fr, mark);
   if (focusRow) $(`tr[data-row="${focusRow}"]`, box)?.scrollIntoView({ block: 'center' });
-  $$('td[data-c]', box).forEach((td) => (td.onclick = () => {
+  $$('td[data-c]', box).forEach((td) => (td.onclick = (ev) => {
+    if (ev.target.tagName === 'IMG') return; // 이미지는 크게 보기
     const rid = Number(td.parentElement.dataset.row); const col = Number(td.dataset.c);
     const row = s.rows.find((r) => r.id === rid);
     const c = openModal(`<h2>${esc(s.name)} · ${colL(col)}${s.rows.indexOf(row) + 1}</h2>
       <textarea id="fc-v" rows="8" list="fo-stores" style="width:100%">${esc(row.cells[col] ?? '')}</textarea>
       <div class="row" style="margin-top:6px;gap:6px"><span class="note">매장명 넣기</span><input id="fc-store" list="fo-stores" placeholder="매장 선택" style="flex:1"><button class="btn sm" id="fc-ins">넣기</button></div>
+      <div style="margin-top:10px"><span class="note">이미지</span>
+        <div class="fb-imgs edit">${imgs(row, col).map((x) => `<span class="fb-im"><img src="/api/photos/${x.id}" data-full="/api/photos/${x.id}"><button class="btn sm danger" data-imdel="${x.id}">삭제</button></span>`).join('') || '<span class="note">없음</span>'}</div>
+        <input type="file" id="fc-files" accept="image/*" multiple style="margin-top:6px"></div>
       <div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn" data-close>취소</button><button class="btn primary" id="fc-save">저장</button></div>`, true);
     $('#fc-ins', c).onclick = () => { const v = $('#fc-store', c).value; if (v) { const ta = $('#fc-v', c); ta.value = ta.value ? `${ta.value}${ta.value.endsWith('\n') ? '' : '\n'}${v}` : v; } };
     $('#fc-v', c).focus();
     $('#fc-save', c).onclick = async () => {
-      try { await api('/api/fo/rows/' + rid, { method: 'PUT', body: { col, value: $('#fc-v', c).value } }); closeModal(); reload(rid); } catch (e) { fail(e); }
+      try {
+        await api('/api/fo/rows/' + rid, { method: 'PUT', body: { col, value: $('#fc-v', c).value } });
+        const files = $('#fc-files', c).files;
+        if (files.length) { const fd = new FormData(); fd.append('col', col); for (const f of files) fd.append('photos', await shrink(f)); await api(`/api/fo/rows/${rid}/images`, { method: 'POST', body: fd }); }
+        closeModal(); reload(rid);
+      } catch (e) { fail(e); }
     };
+    $$('[data-imdel]', c).forEach((b) => (b.onclick = async () => {
+      if (!confirm('이 이미지를 삭제할까요?')) return;
+      try { await api('/api/fo/images/' + b.dataset.imdel, { method: 'DELETE' }); b.closest('.fb-im').remove(); reload(rid); } catch (e) { fail(e); }
+    }));
   }));
   $$('[data-rmenu]', box).forEach((td) => (td.onclick = () => {
     const rid = Number(td.dataset.rmenu); const row = s.rows.find((r) => r.id === rid);

@@ -392,7 +392,8 @@ app.get('/api/photos/:id', auth, wrap(async (req, res) => {
   const r = await q('SELECT * FROM photos WHERE id=$1', [int(req.params.id)]);
   const p = r.rows[0];
   if (!p) throw bad('사진 없음', 404);
-  if (!isAdmin(req) && p.owner_type !== 'maintenance') {
+  if (p.owner_type === 'fo_row') { if (!fo.foAccess(req.user)) throw bad('권한 없음', 403); }
+  else if (!isAdmin(req) && p.owner_type !== 'maintenance') {
     const table = 'expenses';
     const o = await q(`SELECT user_id FROM ${table} WHERE id=$1`, [p.owner_id]);
     if (o.rows[0]?.user_id !== req.user.id && !(req.user.share_team && o.rows[0]?.user_id === req.user.share_team)) throw bad('권한 없음', 403);
@@ -759,7 +760,7 @@ app.get('/api/team-summary', auth, wrap(async (req, res) => {
 // kind=trips|expenses|maintenance, 공통: from,to,user_ids,ym(YYYY-MM)
 // expenses: book=drive|team|all, card_type, category(쉼표), has_photo=1 / maintenance: vehicle_id / scope=summary(대표 제외), holders=1(법인카드 일지 사용자)
 // 가맹운영팀 업무 (라운딩일정·가맹점관리 히스토리·매뉴얼·AS 히스토리)
-fo.register(app, { auth, wrap, bad, int, str, isDate });
+fo.register(app, { auth, wrap, bad, int, str, isDate, upload });
 
 // 사용 목적별 × 월별 카드 사용 합계 (통합 합계관리·부서관리 합계관리)
 app.get('/api/purpose-summary', auth, wrap(async (req, res) => {

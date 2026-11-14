@@ -252,3 +252,7 @@ mark { background: #ffe58a; padding: 0 1px; }
 .fb-grid td.dcell { background: #f3f8ff; font-weight: 600; }
 .fb-grid tr.focus td { background: #fff3c4; }
 @media (max-width: 900px) { .fb-layout { grid-template-columns: 1fr; } .fb-tabs { position: static; max-height: 220px; } .cal-cell { min-height: 64px; } .cal-l { display: none; } }
+.fb-imgs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.fb-imgs img { height: 64px; max-width: 120px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); cursor: zoom-in; }
+.fb-imgs.edit img { height: 90px; }
+.fb-im { display: inline-flex; flex-direction: column; gap: 3px; align-items: center; }

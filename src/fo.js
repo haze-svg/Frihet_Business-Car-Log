@@ -35,6 +35,8 @@ async function migrate() {
     ord DOUBLE PRECISION NOT NULL, cells JSONB NOT NULL DEFAULT '[]',
     updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
   await q('CREATE INDEX IF NOT EXISTS fo_rows_sheet ON fo_rows(sheet_id, ord)');
+  // 시트 셀 이미지: photos(owner_type='fo_row', owner_id=행 id, col=열 번호)
+  await q('ALTER TABLE photos ADD COLUMN IF NOT EXISTS col INTEGER');
 }
 
 const foAccess = (u) => !!u && (u.role === 'admin' || u.department === DEPT);
@@ -187,7 +189,7 @@ async function importPackage(data, dryRun) {
         if (ex && ex.source === 'web') { rep.kept_web_sheets++; continue; }
         const isStore = board === 'store' && rows.slice(0, 2).some((r) => clean(r[1]) === '지점명');
         let sid;
-        if (ex) { sid = ex.id; await client.query('DELETE FROM fo_rows WHERE sheet_id=$1', [sid]); await client.query('UPDATE fo_sheets SET ord=$2, is_store=$3, updated_at=now() WHERE id=$1', [sid, ord, isStore]); }
+        if (ex) { sid = ex.id; await client.query("DELETE FROM photos WHERE owner_type='fo_row' AND owner_id IN (SELECT id FROM fo_rows WHERE sheet_id=$1)", [sid]); await client.query('DELETE FROM fo_rows WHERE sheet_id=$1', [sid]); await client.query('UPDATE fo_sheets SET ord=$2, is_store=$3, updated_at=now() WHERE id=$1', [sid, ord, isStore]); }
         else sid = (await client.query(`INSERT INTO fo_sheets(board,name,ord,is_store,source) VALUES($1,$2,$3,$4,'sheet') RETURNING id`, [board, name, ord, isStore])).rows[0].id;
         for (let i = 0; i < rows.length; i++) {
           await client.query('INSERT INTO fo_rows(sheet_id,ord,cells) VALUES($1,$2,$3)', [sid, i + 1, JSON.stringify(rows[i])]);
@@ -201,8 +203,37 @@ async function importPackage(data, dryRun) {
   return rep;
 }
 
+// ---------- 이미지 패키지 (version: 'fo_images') ----------
+// { version:'fo_images', images:[{board, sheet, row(1부터, 시트 행 번호), col(0부터), file:'img/..', mime, name}] } + img/*
+// 같은 패키지를 다시 올리면 이관 이미지(uploaded_by NULL)만 지우고 다시 넣음
+async function importImages(data, dryRun) {
+  const rep = { fo_images: true, dry_run: dryRun, images: 0, rows_created: 0, sheet_missing: [], file_missing: 0 };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sheets = new Map((await client.query('SELECT id, board, name FROM fo_sheets')).rows.map((s) => [`${s.board}|${s.name}`, s.id]));
+    const cleared = new Set();
+    for (const im of data.images || []) {
+      const sid = sheets.get(`${im.board}|${clean(im.sheet)}`);
+      if (!sid) { if (!rep.sheet_missing.includes(im.sheet)) rep.sheet_missing.push(im.sheet); continue; }
+      if (!cleared.has(sid)) {
+        await client.query(`DELETE FROM photos WHERE owner_type='fo_row' AND uploaded_by IS NULL AND owner_id IN (SELECT id FROM fo_rows WHERE sheet_id=$1)`, [sid]);
+        cleared.add(sid);
+      }
+      const buf = data.readFile(im.file); if (!buf) { rep.file_missing++; continue; }
+      let row = (await client.query('SELECT id FROM fo_rows WHERE sheet_id=$1 AND ord=$2 LIMIT 1', [sid, im.row])).rows[0];
+      if (!row) { row = (await client.query("INSERT INTO fo_rows(sheet_id,ord,cells) VALUES($1,$2,'[]') RETURNING id", [sid, im.row])).rows[0]; rep.rows_created++; }
+      await client.query('INSERT INTO photos(owner_type,owner_id,col,filename,mime,size,data) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        ['fo_row', row.id, Number(im.col) || 0, im.name || 'image.jpg', im.mime || 'image/jpeg', buf.length, buf]);
+      rep.images++;
+    }
+    if (dryRun) await client.query('ROLLBACK'); else await client.query('COMMIT');
+  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+  return rep;
+}
+
 // ---------- API ----------
-function register(app, { auth, wrap, bad, int, str, isDate }) {
+function register(app, { auth, wrap, bad, int, str, isDate, upload }) {
   const need = (req) => { if (!foAccess(req.user)) throw bad('가맹운영팀과 관리자만 사용할 수 있습니다', 403); };
   const lead = (req) => { if (!foLead(req.user)) throw bad('가맹운영팀 팀장·관리자만 가능합니다', 403); };
 
@@ -333,6 +364,8 @@ function register(app, { auth, wrap, bad, int, str, isDate }) {
     need(req);
     const s = await sheetOf(req.params.id);
     const rows = (await q('SELECT id, ord, cells FROM fo_rows WHERE sheet_id=$1 ORDER BY ord, id', [s.id])).rows;
+    const imgs = (await q(`SELECT p.id, p.owner_id, p.col, p.filename FROM photos p JOIN fo_rows r ON r.id=p.owner_id WHERE p.owner_type='fo_row' AND r.sheet_id=$1 ORDER BY p.id`, [s.id])).rows;
+    for (const r of rows) r.images = imgs.filter((i) => i.owner_id === r.id).map((i) => ({ id: i.id, col: i.col ?? 0, name: i.filename }));
     res.json({ ...s, rows });
   }));
   app.post('/api/fo/sheets', auth, wrap(async (req, res) => {
@@ -359,6 +392,7 @@ function register(app, { auth, wrap, bad, int, str, isDate }) {
   app.delete('/api/fo/sheets/:id', auth, wrap(async (req, res) => {
     need(req); lead(req);
     const s = await sheetOf(req.params.id);
+    await q("DELETE FROM photos WHERE owner_type='fo_row' AND owner_id IN (SELECT id FROM fo_rows WHERE sheet_id=$1)", [s.id]);
     await q('DELETE FROM fo_sheets WHERE id=$1', [s.id]);
     res.json({ ok: true });
   }));
@@ -394,10 +428,31 @@ function register(app, { auth, wrap, bad, int, str, isDate }) {
     await touch(r.sheet_id, req.user.id);
     res.json({ ok: true, cells });
   }));
+  // 셀 이미지 추가·삭제
+  app.post('/api/fo/rows/:id/images', auth, upload.array('photos', 10), wrap(async (req, res) => {
+    need(req);
+    const r = (await q('SELECT * FROM fo_rows WHERE id=$1', [int(req.params.id)])).rows[0];
+    if (!r) throw bad('행 없음', 404);
+    const col = int(req.body.col) || 0;
+    for (const f of req.files || []) {
+      await q('INSERT INTO photos(owner_type,owner_id,col,filename,mime,size,data,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+        ['fo_row', r.id, col, Buffer.from(f.originalname, 'latin1').toString('utf8'), f.mimetype, f.size, f.buffer, req.user.id]);
+    }
+    await touch(r.sheet_id, req.user.id);
+    res.json({ ok: true });
+  }));
+  app.delete('/api/fo/images/:id', auth, wrap(async (req, res) => {
+    need(req);
+    const p = (await q("SELECT p.id, r.sheet_id FROM photos p JOIN fo_rows r ON r.id=p.owner_id WHERE p.id=$1 AND p.owner_type='fo_row'", [int(req.params.id)])).rows[0];
+    if (!p) throw bad('이미지 없음', 404);
+    await q('DELETE FROM photos WHERE id=$1', [p.id]); await touch(p.sheet_id, req.user.id);
+    res.json({ ok: true });
+  }));
   app.delete('/api/fo/rows/:id', auth, wrap(async (req, res) => {
     need(req);
     const r = (await q('SELECT * FROM fo_rows WHERE id=$1', [int(req.params.id)])).rows[0];
     if (!r) throw bad('행 없음', 404);
+    await q("DELETE FROM photos WHERE owner_type='fo_row' AND owner_id=$1", [r.id]);
     await q('DELETE FROM fo_rows WHERE id=$1', [r.id]); await touch(r.sheet_id, req.user.id);
     res.json({ ok: true });
   }));
@@ -413,4 +468,4 @@ function register(app, { auth, wrap, bad, int, str, isDate }) {
   }));
 }
 
-module.exports = { migrate, register, importPackage, parseCsv, parseRoundingSheet, foAccess, foLead, BOARDS, DEPT };
+module.exports = { migrate, register, importPackage, importImages, parseCsv, parseRoundingSheet, foAccess, foLead, BOARDS, DEPT };
