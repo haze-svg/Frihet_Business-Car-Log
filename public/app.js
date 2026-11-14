@@ -180,13 +180,14 @@ async function boot() {
   $('#me-name').innerHTML = `<b>${userLabel(state.me)}</b><br><span class="note">${esc(state.me.department || '')} ${esc(state.me.position || '')}</span>`;
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
   $$('.lead-only').forEach((el) => el.classList.toggle('hidden', !(isAdmin() || state.me.is_holder)));
+  foNav();
   if (state.me.must_change_password) { $('#main').innerHTML = '<div class="card">최초 로그인입니다. 비밀번호를 변경한 뒤 이용할 수 있습니다.</div>'; changePassword(true); return; }
   try { const c = await api('/api/public-config'); state.jsKey = c.kakao_js_key; state.granter = !!c.granter; } catch {}
   window.onhashchange = render;
   render();
 }
 // 주소(#) 기반 화면 전환: 브라우저·마우스 뒤로가기로 이전 화면 복귀
-$$('#nav a').forEach((a) => (a.onclick = () => go(a.dataset.page)));
+$$('#nav a[data-page]').forEach((a) => (a.onclick = () => go(a.dataset.page)));
 function go(hash) {
   if (location.hash === '#' + hash) render(); else location.hash = hash;
 }
@@ -195,7 +196,8 @@ async function render() {
   state.navCount = (state.navCount || 0) + 1;
   const [page, kind, id, sub] = (location.hash.replace('#', '') || 'trips').split('/');
   state.page = page;
-  $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
+  $$('#nav a[data-page]').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
+  if (page.startsWith('fo-')) { window.scrollTo(0, 0); return foPage(page, kind); }
   state.tripUser = null; state.vehicle = null; state.cardUser = null;
   try {
     if (page === 'trips' && kind === 'u' && id) {

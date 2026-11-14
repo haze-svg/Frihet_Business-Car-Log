@@ -17,6 +17,7 @@ function parsePayload(buf) {
     raw = entry.getData();
   } else raw = buf[0] === 0x1f && buf[1] === 0x8b ? zlib.gunzipSync(buf) : buf;
   const data = JSON.parse(raw.toString('utf8'));
+  if (data.version === 'fo') return data;
   if (data.version === 'patch') { data.readFile = (p) => { const e = zip && zip.getEntry(p); return e ? e.getData() : null; }; return data; }
   if (![1, 2].includes(data.version) || !Array.isArray(data.trips)) throw Object.assign(new Error('이관 데이터 형식이 올바르지 않습니다'), { status: 400 });
   data.readFile = (p) => {
@@ -115,6 +116,7 @@ async function applyPatch(data, dryRun) {
 
 async function importLegacy(buf, { dryRun = false } = {}) {
   const data = parsePayload(buf);
+  if (data.version === 'fo') return require('./fo').importPackage(data, dryRun);
   if (data.version === 'patch') return applyPatch(data, dryRun);
   const client = await pool.connect();
   const rep = { vehicles_created: 0, vehicles_updated: 0, trips: 0, expenses: 0, maintenance: 0, receipt_groups: 0, photos: 0, missing_photos: 0, unmatched_names: {}, dry_run: dryRun };

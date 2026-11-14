@@ -24,7 +24,7 @@ h2 { font-size: 16px; margin: 0 0 10px; }
 
 .layout { display: grid; grid-template-columns: 230px 1fr; min-height: 100vh; }
 .sidebar { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
-#nav { display: flex; flex-direction: column; gap: 4px; padding: 6px 12px; flex: 1; }
+#nav { display: flex; flex-direction: column; gap: 4px; padding: 6px 12px; flex: 1; overflow-y: auto; }
 #nav a { padding: 10px 12px; border-radius: 8px; color: var(--ink); font-weight: 500; }
 #nav a:hover { background: #ecdcc7; }
 #nav a.active { background: var(--brand); color: #fff; }
@@ -210,3 +210,45 @@ h3.sec { font-size: 15px; margin: 10px 0 0; padding-top: 12px; border-top: 1px s
 /* 사용 목적별 합계표 */
 .ptable tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
 .ptable tr.unset-row td { color: #b4552d; }
+/* ===== 가맹운영팀 업무 ===== */
+.nav-group { display: flex; justify-content: space-between; align-items: center; }
+.nav-group::after { content: '▸'; font-size: 11px; color: var(--muted); transition: transform .15s; }
+.nav-group.open::after { transform: rotate(90deg); }
+.nav-sub { display: none; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 2px solid var(--line); margin-left: 10px; }
+.nav-sub.open { display: flex; }
+#nav .nav-sub a { font-size: 13px; padding: 7px 10px; white-space: normal; line-height: 1.35; }
+.chip { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 4px 11px; font-size: 13px; cursor: pointer; }
+.chip.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+mark { background: #ffe58a; padding: 0 1px; }
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-h { text-align: center; font-size: 12px; color: var(--muted); padding: 4px 0; }
+.cal-cell { background: #fff; border: 1px solid var(--line); border-radius: 8px; min-height: 96px; padding: 5px 6px; cursor: pointer; overflow: hidden; }
+.cal-cell.empty { background: transparent; border: 0; cursor: default; }
+.cal-cell:hover { border-color: var(--accent); }
+.cal-cell.sel { border: 2px solid var(--brand); background: #fffaf3; }
+.cal-cell.today .cal-d { color: var(--corp); }
+.cal-cell.sun .cal-d { color: var(--danger); } .cal-cell.sat .cal-d { color: var(--corp); }
+.cal-d { font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; margin-bottom: 2px; }
+.cal-n { font-weight: 500; font-size: 11px; color: var(--muted); }
+.cal-l { font-size: 11.5px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-table td { vertical-align: top; }
+.r-item { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+.r-no { display: inline-block; min-width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; background: var(--side); font-size: 11px; flex-shrink: 0; }
+.r-irow { display: grid; grid-template-columns: 1fr 1.3fr auto; gap: 6px; margin: 6px 0; align-items: start; }
+.r-irow textarea { min-height: 36px; resize: vertical; }
+.fb-layout { display: grid; grid-template-columns: 230px 1fr; gap: 12px; align-items: start; }
+.fb-tabs { position: sticky; top: 10px; max-height: calc(100vh - 120px); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 10px; }
+.fb-tabs input { margin-bottom: 6px; }
+.fb-g { font-size: 11px; color: var(--muted); padding: 8px 6px 2px; }
+.fb-tab { padding: 6px 8px; border-radius: 6px; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fb-tab:hover { background: var(--side); } .fb-tab.on { background: var(--brand); color: #fff; }
+.fb-sheet { min-width: 0; }
+.fb-grid-wrap { overflow: auto; max-height: calc(100vh - 220px); border: 1px solid var(--line); border-radius: 8px; }
+.fb-grid { border-collapse: collapse; font-size: 12.5px; }
+.fb-grid th { position: sticky; top: 0; background: var(--side); z-index: 1; font-weight: 600; color: var(--muted); padding: 3px 6px; border: 1px solid var(--line); }
+.fb-grid td { border: 1px solid var(--line); padding: 3px 6px; vertical-align: top; min-width: 60px; max-width: 280px; cursor: pointer; background: #fff; }
+.fb-grid td:hover { background: #fff6e8; }
+.fb-grid td.rn, .fb-grid th.rn { position: sticky; left: 0; background: var(--side); color: var(--muted); text-align: center; min-width: 36px; z-index: 2; }
+.fb-grid td.dcell { background: #f3f8ff; font-weight: 600; }
+.fb-grid tr.focus td { background: #fff3c4; }
+@media (max-width: 900px) { .fb-layout { grid-template-columns: 1fr; } .fb-tabs { position: static; max-height: 220px; } .cal-cell { min-height: 64px; } .cal-l { display: none; } }

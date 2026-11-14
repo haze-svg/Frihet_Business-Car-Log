@@ -26,6 +26,18 @@
         <a data-page="maintenance">차량관리 및 점검일지</a>
         <a data-page="teamcard" class="lead-only hidden">부서관리 법인카드 일지</a>
         <a data-page="summary">통합 합계관리</a>
+        <a id="fo-toggle" class="fo-only hidden nav-group">가맹운영팀 업무</a>
+        <div id="fo-sub" class="nav-sub fo-only hidden">
+          <a data-page="fo-rounding">가맹운영팀 라운딩일정</a>
+          <a data-page="fo-store">가맹점관리 히스토리</a>
+          <a data-page="fo-machine">가맹운영팀 머신관리 매뉴얼 및 주간회의 직영관리</a>
+          <a data-page="fo-manual">가맹운영팀 업무 매뉴얼</a>
+          <a id="fo-as-toggle" class="nav-group">매장 AS 히스토리</a>
+          <div id="fo-as-sub" class="nav-sub">
+            <a data-page="fo-as_before">2026.07월 이전</a>
+            <a data-page="fo-as_after">2026.07월 이후</a>
+          </div>
+        </div>
         <div class="nav-sep admin-only">관리자</div>
         <a data-page="staff" class="admin-only">직원·차량 관리</a>
         <a data-page="cardadmin" class="admin-only">법인카드 사용 관리</a>
@@ -42,5 +54,6 @@
   <div id="modal" class="modal hidden"><div class="modal-card" id="modal-card"></div></div>
   <div id="toast" class="toast hidden"></div>
   <script src="/app.js"></script>
+  <script src="/fo.js"></script>
 </body>
 </html>

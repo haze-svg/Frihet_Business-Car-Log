@@ -10,6 +10,7 @@ const multer = require('multer');
 const { q, pool, migrate } = require('./db');
 const ext = require('./external');
 const granter = require('./granter');
+const fo = require('./fo');
 const { bootstrap } = require('./seed');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -143,6 +144,7 @@ app.get('/api/me', auth, wrap(async (req, res) => {
   res.json({
     id: u.id, email: u.email, name: u.name, nickname: u.nickname, department: u.department,
     position: u.position, role: u.role, must_change_password: u.must_change_password, vehicles: v.rows, is_lead: u.role === 'admin' || isHolder(u), is_holder: isHolder(u) || !!u.share_team, share_team: u.share_team || null, team_card: u.team_card,
+    fo_access: fo.foAccess(u), fo_lead: fo.foLead(u),
   });
 }));
 
@@ -756,6 +758,9 @@ app.get('/api/team-summary', auth, wrap(async (req, res) => {
 // ---------- 대시보드 숫자 상세 (드릴다운) ----------
 // kind=trips|expenses|maintenance, 공통: from,to,user_ids,ym(YYYY-MM)
 // expenses: book=drive|team|all, card_type, category(쉼표), has_photo=1 / maintenance: vehicle_id / scope=summary(대표 제외), holders=1(법인카드 일지 사용자)
+// 가맹운영팀 업무 (라운딩일정·가맹점관리 히스토리·매뉴얼·AS 히스토리)
+fo.register(app, { auth, wrap, bad, int, str, isDate });
+
 // 사용 목적별 × 월별 카드 사용 합계 (통합 합계관리·부서관리 합계관리)
 app.get('/api/purpose-summary', auth, wrap(async (req, res) => {
   const { from, to } = period(req);
@@ -921,10 +926,10 @@ app.get('/api/export', auth, wrap(async (req, res) => {
 // 재배포 직후에도 새 화면이 바로 보이도록: index.html은 캐시 금지, js/css는 내용 해시로 버전 부여
 const PUB = path.join(__dirname, '..', 'public');
 const assetVer = require('crypto').createHash('sha1')
-  .update(fs.readFileSync(path.join(PUB, 'app.js'))).update(fs.readFileSync(path.join(PUB, 'style.css')))
+  .update(fs.readFileSync(path.join(PUB, 'app.js'))).update(fs.readFileSync(path.join(PUB, 'fo.js'))).update(fs.readFileSync(path.join(PUB, 'style.css')))
   .digest('hex').slice(0, 10);
 const indexHtml = fs.readFileSync(path.join(PUB, 'index.html'), 'utf8')
-  .replace('/app.js', `/app.js?v=${assetVer}`).replace('/style.css', `/style.css?v=${assetVer}`);
+  .replace('/app.js', `/app.js?v=${assetVer}`).replace('/fo.js', `/fo.js?v=${assetVer}`).replace('/style.css', `/style.css?v=${assetVer}`);
 const sendIndex = (req, res) => { res.set('Cache-Control', 'no-cache, no-store, must-revalidate'); res.type('html').send(indexHtml); };
 app.get(['/', '/index.html'], sendIndex);
 app.use(express.static(PUB, { index: false, maxAge: '30d' }));
@@ -938,6 +943,7 @@ app.use((err, req, res, next) => {
 
 (async () => {
   await migrate();
+  await fo.migrate();
   if (!JWT_SECRET) {
     const r = await q("SELECT value FROM settings WHERE key='jwt_secret'");
     JWT_SECRET = r.rows[0]?.value;
