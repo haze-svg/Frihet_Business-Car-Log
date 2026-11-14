@@ -183,14 +183,15 @@ async function importPackage(data, dryRun) {
       let ord = 0;
       for (const t of tabs) {
         ord++;
+        const tOrd = Number(t.ord) || ord; // 패키지에 원래 탭 위치가 있으면 사용
         const name = clean(t.name); if (!name) continue;
         const rows = trimRows(parseCsv(t.csv || ''));
         const ex = (await client.query('SELECT id, source FROM fo_sheets WHERE board=$1 AND name=$2', [board, name])).rows[0];
         if (ex && ex.source === 'web') { rep.kept_web_sheets++; continue; }
         const isStore = board === 'store' && rows.slice(0, 2).some((r) => clean(r[1]) === '지점명');
         let sid;
-        if (ex) { sid = ex.id; await client.query("DELETE FROM photos WHERE owner_type='fo_row' AND owner_id IN (SELECT id FROM fo_rows WHERE sheet_id=$1)", [sid]); await client.query('DELETE FROM fo_rows WHERE sheet_id=$1', [sid]); await client.query('UPDATE fo_sheets SET ord=$2, is_store=$3, updated_at=now() WHERE id=$1', [sid, ord, isStore]); }
-        else sid = (await client.query(`INSERT INTO fo_sheets(board,name,ord,is_store,source) VALUES($1,$2,$3,$4,'sheet') RETURNING id`, [board, name, ord, isStore])).rows[0].id;
+        if (ex) { sid = ex.id; await client.query("DELETE FROM photos WHERE owner_type='fo_row' AND owner_id IN (SELECT id FROM fo_rows WHERE sheet_id=$1)", [sid]); await client.query('DELETE FROM fo_rows WHERE sheet_id=$1', [sid]); await client.query('UPDATE fo_sheets SET ord=$2, is_store=$3, updated_at=now() WHERE id=$1', [sid, tOrd, isStore]); }
+        else sid = (await client.query(`INSERT INTO fo_sheets(board,name,ord,is_store,source) VALUES($1,$2,$3,$4,'sheet') RETURNING id`, [board, name, tOrd, isStore])).rows[0].id;
         for (let i = 0; i < rows.length; i++) {
           await client.query('INSERT INTO fo_rows(sheet_id,ord,cells) VALUES($1,$2,$3)', [sid, i + 1, JSON.stringify(rows[i])]);
           rep.rows++;
